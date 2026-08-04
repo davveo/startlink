@@ -26,6 +26,9 @@ Starlink 是一个用 Go 编写的异步推送平台骨架。业务方通过 HTT
 - [开发与检查](#开发与检查)
 - [目录结构](#目录结构)
 
+## 整体架构图
+![starlink-architecture.jpg](docs%2Fstarlink-architecture.jpg)
+
 ## 已实现能力
 
 - 活动创建、查询、定时执行、暂停、恢复、取消和失败重推 API
