@@ -1,0 +1,740 @@
+package repo
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	mysqldriver "github.com/go-sql-driver/mysql"
+	"github.com/starlink/push/internal/domain"
+	"github.com/starlink/push/internal/port"
+	"gorm.io/driver/mysql"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+	"gorm.io/gorm/logger"
+)
+
+type TaskRepo struct {
+	db *gorm.DB
+}
+
+func NewDB(dsn string, maxIdle, maxOpen int) (*gorm.DB, error) {
+	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Warn),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("open mysql: %w", err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, err
+	}
+	sqlDB.SetMaxIdleConns(maxIdle)
+	sqlDB.SetMaxOpenConns(maxOpen)
+	sqlDB.SetConnMaxLifetime(time.Hour)
+	return db, nil
+}
+
+func AutoMigrate(db *gorm.DB) error {
+	// 建唯一索引前清理历史重复流水，保留同维度最新一条
+	_ = db.Exec(`
+DELETE pr FROM push_records pr
+INNER JOIN (
+  SELECT main_task_id, user_id, channel, MAX(id) AS keep_id
+  FROM push_records
+  GROUP BY main_task_id, user_id, channel
+  HAVING COUNT(*) > 1
+) d ON pr.main_task_id = d.main_task_id
+   AND pr.user_id = d.user_id
+   AND pr.channel = d.channel
+   AND pr.id <> d.keep_id
+`).Error
+
+	return db.AutoMigrate(
+		&domain.MainTask{},
+		&domain.SubTask{},
+		&domain.PushRecord{},
+		&domain.PushReceipt{},
+		&domain.Template{},
+	)
+}
+
+func NewTaskRepo(db *gorm.DB) *TaskRepo {
+	return &TaskRepo{db: db}
+}
+
+func (r *TaskRepo) CreateMainTask(ctx context.Context, task *domain.MainTask) error {
+	return r.db.WithContext(ctx).Create(task).Error
+}
+
+func (r *TaskRepo) GetMainTask(ctx context.Context, id uint64) (*domain.MainTask, error) {
+	var t domain.MainTask
+	if err := r.db.WithContext(ctx).First(&t, id).Error; err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
+func (r *TaskRepo) GetMainTaskByBizID(ctx context.Context, bizID string) (*domain.MainTask, error) {
+	var t domain.MainTask
+	if err := r.db.WithContext(ctx).Where("biz_id = ?", bizID).First(&t).Error; err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
+func (r *TaskRepo) MarkMainTaskRunning(ctx context.Context, id uint64, workerID string) (bool, error) {
+	now := time.Now()
+	res := r.db.WithContext(ctx).Model(&domain.MainTask{}).
+		Where("id = ? AND status = ?", id, domain.TaskStatusPending).
+		Updates(map[string]any{
+			"status":         domain.TaskStatusRunning,
+			"started_at":     now,
+			"split_owner":    workerID,
+			"split_lease_at": now,
+		})
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
+}
+
+func (r *TaskRepo) RenewSplitLease(ctx context.Context, id uint64, workerID string) (bool, error) {
+	now := time.Now()
+	res := r.db.WithContext(ctx).Model(&domain.MainTask{}).
+		Where("id = ? AND status = ? AND split_owner = ?", id, domain.TaskStatusRunning, workerID).
+		Updates(map[string]any{"split_lease_at": now})
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
+}
+
+func (r *TaskRepo) ClearSplitLease(ctx context.Context, id uint64) error {
+	return r.db.WithContext(ctx).Model(&domain.MainTask{}).
+		Where("id = ?", id).
+		Updates(map[string]any{
+			"split_owner":    "",
+			"split_lease_at": nil,
+		}).Error
+}
+
+func (r *TaskRepo) ListStaleSplitMainTasks(ctx context.Context, leaseTimeoutSec int, limit int) ([]domain.MainTask, error) {
+	if leaseTimeoutSec <= 0 {
+		leaseTimeoutSec = 90
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+	deadline := time.Now().Add(-time.Duration(leaseTimeoutSec) * time.Second)
+	var list []domain.MainTask
+	// 租约过期且仍持有 split_owner：含无子任务卡单与流式拆分中途崩溃
+	err := r.db.WithContext(ctx).
+		Where(`status = ? AND split_owner <> '' AND split_owner IS NOT NULL AND (split_lease_at IS NULL OR split_lease_at < ?)`,
+			domain.TaskStatusRunning, deadline).
+		Order("id ASC").
+		Limit(limit).
+		Find(&list).Error
+	return list, err
+}
+
+func (r *TaskRepo) ClaimStaleSplitMainTask(ctx context.Context, id uint64, workerID string, leaseTimeoutSec int) (bool, error) {
+	if leaseTimeoutSec <= 0 {
+		leaseTimeoutSec = 90
+	}
+	deadline := time.Now().Add(-time.Duration(leaseTimeoutSec) * time.Second)
+	now := time.Now()
+
+	var claimed bool
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var main domain.MainTask
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ?", id).First(&main).Error; err != nil {
+			return err
+		}
+		if main.Status != domain.TaskStatusRunning || main.SplitOwner == "" {
+			return nil
+		}
+		if main.SplitLeaseAt != nil && !main.SplitLeaseAt.Before(deadline) {
+			return nil // 租约仍有效
+		}
+		res := tx.Model(&domain.MainTask{}).
+			Where("id = ? AND status = ? AND split_owner <> '' AND (split_lease_at IS NULL OR split_lease_at < ?)",
+				id, domain.TaskStatusRunning, deadline).
+			Updates(map[string]any{
+				"split_owner":    workerID,
+				"split_lease_at": now,
+				"sub_task_total": 0,
+				"total_count":    0,
+			})
+		if res.Error != nil {
+			return res.Error
+		}
+		claimed = res.RowsAffected > 0
+		return nil
+	})
+	return claimed, err
+}
+
+func (r *TaskRepo) ListPendingMainTasks(ctx context.Context, limit int) ([]domain.MainTask, error) {
+	var list []domain.MainTask
+	now := time.Now()
+	err := r.db.WithContext(ctx).
+		Where("status = ? AND (scheduled_at IS NULL OR scheduled_at <= ?)", domain.TaskStatusPending, now).
+		Order("id ASC").
+		Limit(limit).
+		Find(&list).Error
+	return list, err
+}
+
+// CancelMainTask 仅取消仍处于可执行状态的主任务
+func (r *TaskRepo) CancelMainTask(ctx context.Context, id uint64) (bool, error) {
+	now := time.Now()
+	res := r.db.WithContext(ctx).Model(&domain.MainTask{}).
+		Where("id = ? AND status IN ?", id, []domain.TaskStatus{
+			domain.TaskStatusPending,
+			domain.TaskStatusRunning,
+			domain.TaskStatusPaused,
+			domain.TaskStatusRetrying,
+		}).
+		Updates(map[string]any{
+			"status":      domain.TaskStatusCancelled,
+			"finished_at": now,
+			"version":     gorm.Expr("version + 1"),
+		})
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
+}
+
+func (r *TaskRepo) PauseMainTask(ctx context.Context, id uint64) (bool, error) {
+	res := r.db.WithContext(ctx).Model(&domain.MainTask{}).
+		Where("id = ? AND status IN ?", id, []domain.TaskStatus{
+			domain.TaskStatusPending,
+			domain.TaskStatusRunning,
+			domain.TaskStatusRetrying,
+		}).
+		Updates(map[string]any{
+			"status":  domain.TaskStatusPaused,
+			"version": gorm.Expr("version + 1"),
+		})
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
+}
+
+func (r *TaskRepo) ResumeMainTask(ctx context.Context, id uint64, hasSubTasks bool) (bool, error) {
+	next := domain.TaskStatusPending
+	if hasSubTasks {
+		next = domain.TaskStatusRunning
+	}
+	res := r.db.WithContext(ctx).Model(&domain.MainTask{}).
+		Where("id = ? AND status = ?", id, domain.TaskStatusPaused).
+		Updates(map[string]any{
+			"status":      next,
+			"finished_at": nil,
+			"version":     gorm.Expr("version + 1"),
+		})
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
+}
+
+func (r *TaskRepo) ReopenMainTask(ctx context.Context, id uint64, addSubTasks int) (bool, error) {
+	updates := map[string]any{
+		"status":      domain.TaskStatusRunning,
+		"finished_at": nil,
+		"version":     gorm.Expr("version + 1"),
+	}
+	if addSubTasks > 0 {
+		updates["sub_task_total"] = gorm.Expr("sub_task_total + ?", addSubTasks)
+	}
+	res := r.db.WithContext(ctx).Model(&domain.MainTask{}).
+		Where("id = ? AND status IN ?", id, []domain.TaskStatus{
+			domain.TaskStatusFailed,
+			domain.TaskStatusPartial,
+		}).
+		Updates(updates)
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
+}
+
+// UpdateMainTaskStats 计数无锁原子递增（不丢增量）；终态切换才 CAS version。
+// 非终态不会把 paused/cancelled/终态盖回 running。
+func (r *TaskRepo) UpdateMainTaskStats(ctx context.Context, id uint64, version int64, successDelta, failDelta int64, subDoneDelta int, status domain.TaskStatus) (bool, error) {
+	if successDelta != 0 || failDelta != 0 || subDoneDelta != 0 {
+		res := r.db.WithContext(ctx).Model(&domain.MainTask{}).
+			Where("id = ?", id).
+			Updates(map[string]any{
+				"success_count": gorm.Expr("success_count + ?", successDelta),
+				"fail_count":    gorm.Expr("fail_count + ?", failDelta),
+				"sub_task_done": gorm.Expr("sub_task_done + ?", subDoneDelta),
+			})
+		if res.Error != nil {
+			return false, res.Error
+		}
+	}
+
+	if !status.IsTerminal() {
+		if status == domain.TaskStatusRunning {
+			_ = r.db.WithContext(ctx).Model(&domain.MainTask{}).
+				Where("id = ? AND status IN ?", id, []domain.TaskStatus{
+					domain.TaskStatusPending,
+					domain.TaskStatusRunning,
+					domain.TaskStatusRetrying,
+				}).
+				Update("status", domain.TaskStatusRunning)
+		}
+		return true, nil
+	}
+
+	now := time.Now()
+	res := r.db.WithContext(ctx).Model(&domain.MainTask{}).
+		Where("id = ? AND version = ? AND status NOT IN ?", id, version, []domain.TaskStatus{
+			domain.TaskStatusSuccess,
+			domain.TaskStatusPartial,
+			domain.TaskStatusFailed,
+			domain.TaskStatusCancelled,
+			domain.TaskStatusPaused,
+		}).
+		Updates(map[string]any{
+			"status":      status,
+			"version":     version + 1,
+			"finished_at": now,
+		})
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
+}
+
+// PatchMainMeta 写入拆分后的总量；不改写 status，排除 paused/cancelled/终态
+func (r *TaskRepo) PatchMainMeta(ctx context.Context, id uint64, total int64, subTotal int) error {
+	return r.db.WithContext(ctx).Model(&domain.MainTask{}).
+		Where("id = ? AND status NOT IN ?", id, []domain.TaskStatus{
+			domain.TaskStatusCancelled,
+			domain.TaskStatusPaused,
+			domain.TaskStatusSuccess,
+			domain.TaskStatusPartial,
+			domain.TaskStatusFailed,
+		}).
+		Updates(map[string]any{
+			"total_count":    total,
+			"sub_task_total": subTotal,
+		}).Error
+}
+
+func (r *TaskRepo) SyncMainUserCounts(ctx context.Context, id uint64, success, fail int64) error {
+	return r.db.WithContext(ctx).Model(&domain.MainTask{}).
+		Where("id = ?", id).
+		Updates(map[string]any{
+			"success_count": success,
+			"fail_count":    fail,
+		}).Error
+}
+
+func (r *TaskRepo) CreateSubTasks(ctx context.Context, tasks []domain.SubTask) error {
+	if len(tasks) == 0 {
+		return nil
+	}
+	return r.db.WithContext(ctx).CreateInBatches(tasks, 100).Error
+}
+
+func (r *TaskRepo) DeleteSubTasksByMainTask(ctx context.Context, mainTaskID uint64) (int64, error) {
+	res := r.db.WithContext(ctx).Where("main_task_id = ?", mainTaskID).Delete(&domain.SubTask{})
+	return res.RowsAffected, res.Error
+}
+
+// ClaimSubTask 使用 FOR UPDATE SKIP LOCKED 实现多实例水平扩展认领。
+// 仅认领「主任务仍为 running 且拆分租约已清」且「子任务 pending/retrying/超时 running」的记录。
+func (r *TaskRepo) ClaimSubTask(ctx context.Context, workerID string, claimTimeoutSec int) (*domain.SubTask, error) {
+	var claimed *domain.SubTask
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var st domain.SubTask
+		timeout := time.Now().Add(-time.Duration(claimTimeoutSec) * time.Second)
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
+			Table("sub_tasks").
+			Select("sub_tasks.*").
+			Joins(`JOIN main_tasks ON main_tasks.id = sub_tasks.main_task_id
+				AND main_tasks.status = ?
+				AND (main_tasks.split_owner = '' OR main_tasks.split_owner IS NULL)`, domain.TaskStatusRunning).
+			Where(`(
+				sub_tasks.status IN (?, ?)
+				OR (sub_tasks.status = ? AND sub_tasks.claimed_at IS NOT NULL AND sub_tasks.claimed_at < ?)
+			)`, domain.TaskStatusPending, domain.TaskStatusRetrying, domain.TaskStatusRunning, timeout).
+			Order("sub_tasks.id ASC").
+			Limit(1).
+			First(&st).Error
+		if err != nil {
+			return err
+		}
+		now := time.Now()
+		res := tx.Model(&domain.SubTask{}).
+			Where("id = ? AND status IN ?", st.ID, []domain.TaskStatus{
+				domain.TaskStatusPending,
+				domain.TaskStatusRetrying,
+				domain.TaskStatusRunning,
+			}).
+			Updates(map[string]any{
+				"status":     domain.TaskStatusRunning,
+				"worker_id":  workerID,
+				"claimed_at": now,
+				"started_at": now,
+			})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		st.Status = domain.TaskStatusRunning
+		st.WorkerID = workerID
+		st.ClaimedAt = &now
+		st.StartedAt = &now
+		claimed = &st
+		return nil
+	})
+	if err == gorm.ErrRecordNotFound {
+		return nil, nil
+	}
+	return claimed, err
+}
+
+// CancelUnfinishedSubTasks 批量取消未完成子任务
+func (r *TaskRepo) CancelUnfinishedSubTasks(ctx context.Context, mainTaskID uint64) (int64, error) {
+	now := time.Now()
+	res := r.db.WithContext(ctx).Model(&domain.SubTask{}).
+		Where("main_task_id = ? AND status IN ?", mainTaskID, []domain.TaskStatus{
+			domain.TaskStatusPending,
+			domain.TaskStatusRunning,
+			domain.TaskStatusRetrying,
+		}).
+		Updates(map[string]any{
+			"status":      domain.TaskStatusCancelled,
+			"finished_at": now,
+			"last_error":  "main task cancelled",
+		})
+	return res.RowsAffected, res.Error
+}
+
+func (r *TaskRepo) ReleaseSubTask(ctx context.Context, id uint64) error {
+	return r.db.WithContext(ctx).Model(&domain.SubTask{}).
+		Where("id = ? AND status = ?", id, domain.TaskStatusRunning).
+		Updates(map[string]any{
+			"status":     domain.TaskStatusPending,
+			"worker_id":  "",
+			"claimed_at": nil,
+			"started_at": nil,
+			"last_error": "released due to pause",
+		}).Error
+}
+
+func (r *TaskRepo) ResetFailedSubTasks(ctx context.Context, mainTaskID uint64) (int64, error) {
+	res := r.db.WithContext(ctx).Model(&domain.SubTask{}).
+		Where("main_task_id = ? AND status = ?", mainTaskID, domain.TaskStatusFailed).
+		Updates(map[string]any{
+			"status":        domain.TaskStatusPending,
+			"success_count": 0,
+			"fail_count":    0,
+			"finished_at":   nil,
+			"worker_id":     "",
+			"claimed_at":    nil,
+			"started_at":    nil,
+			"last_error":    "",
+			"retry_count":   gorm.Expr("retry_count + 1"),
+		})
+	return res.RowsAffected, res.Error
+}
+
+func (r *TaskRepo) MaxShardIndex(ctx context.Context, mainTaskID uint64) (int, error) {
+	var maxIdx *int
+	err := r.db.WithContext(ctx).Model(&domain.SubTask{}).
+		Select("MAX(shard_index)").
+		Where("main_task_id = ?", mainTaskID).
+		Scan(&maxIdx).Error
+	if err != nil {
+		return -1, err
+	}
+	if maxIdx == nil {
+		return -1, nil
+	}
+	return *maxIdx, nil
+}
+
+func (r *TaskRepo) ListSubTasksByStatus(ctx context.Context, mainTaskID uint64, status domain.TaskStatus) ([]domain.SubTask, error) {
+	var list []domain.SubTask
+	err := r.db.WithContext(ctx).
+		Where("main_task_id = ? AND status = ?", mainTaskID, status).
+		Find(&list).Error
+	return list, err
+}
+
+func (r *TaskRepo) SyncMainCounters(ctx context.Context, id uint64, success, fail int64, subDone, subTotal int) error {
+	updates := map[string]any{
+		"success_count": success,
+		"fail_count":    fail,
+		"sub_task_done": subDone,
+		"version":       gorm.Expr("version + 1"),
+	}
+	if subTotal >= 0 {
+		updates["sub_task_total"] = subTotal
+	}
+	return r.db.WithContext(ctx).Model(&domain.MainTask{}).Where("id = ?", id).Updates(updates).Error
+}
+
+func (r *TaskRepo) UpdateSubTaskResult(ctx context.Context, id uint64, workerID string, success, fail int, status domain.TaskStatus, lastErr string) (bool, error) {
+	now := time.Now()
+	res := r.db.WithContext(ctx).Model(&domain.SubTask{}).
+		Where("id = ? AND worker_id = ? AND status IN ?", id, workerID, []domain.TaskStatus{
+			domain.TaskStatusRunning,
+			domain.TaskStatusRetrying,
+		}).
+		Updates(map[string]any{
+			"success_count": success,
+			"fail_count":    fail,
+			"status":        status,
+			"last_error":    lastErr,
+			"finished_at":   now,
+		})
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
+}
+
+func (r *TaskRepo) SummarizeSubTasks(ctx context.Context, mainTaskID uint64) ([]domain.SubTaskStatusSummary, error) {
+	type row struct {
+		Status      domain.TaskStatus
+		SubCount    int
+		UserTotal   int64
+		UserSuccess int64
+		UserFail    int64
+	}
+	var rows []row
+	err := r.db.WithContext(ctx).Model(&domain.SubTask{}).
+		Select(`status,
+			COUNT(*) AS sub_count,
+			COALESCE(SUM(total_count), 0) AS user_total,
+			COALESCE(SUM(success_count), 0) AS user_success,
+			COALESCE(SUM(fail_count), 0) AS user_fail`).
+		Where("main_task_id = ?", mainTaskID).
+		Group("status").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domain.SubTaskStatusSummary, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, domain.SubTaskStatusSummary{
+			Status:      r.Status,
+			SubCount:    r.SubCount,
+			UserTotal:   r.UserTotal,
+			UserSuccess: r.UserSuccess,
+			UserFail:    r.UserFail,
+		})
+	}
+	return out, nil
+}
+
+// PushRepo 推送流水
+type PushRepo struct {
+	db *gorm.DB
+}
+
+func NewPushRepo(db *gorm.DB) *PushRepo {
+	return &PushRepo{db: db}
+}
+
+func (r *PushRepo) UpdateRecordStatus(ctx context.Context, id uint64, status domain.PushStatus, providerID, errMsg string) error {
+	var rec domain.PushRecord
+	if err := r.db.WithContext(ctx).Where("id = ?", id).First(&rec).Error; err != nil {
+		return err
+	}
+	if !rec.Status.CanTransitTo(status) {
+		// 过期/回退事件：幂等忽略，避免冲掉已前进状态
+		return nil
+	}
+	if rec.Status == status && providerID == "" && errMsg == "" {
+		return nil
+	}
+
+	updates := map[string]any{"status": status}
+	if providerID != "" {
+		updates["provider_id"] = providerID
+	}
+	switch {
+	case status == domain.PushStatusFailed:
+		if errMsg != "" {
+			updates["error_msg"] = errMsg
+		}
+	case status.DeliveredOK() || status == domain.PushStatusSending:
+		updates["error_msg"] = errMsg // 成功路径清空；sending 占位通常为空
+	case status == domain.PushStatusQueued || status == domain.PushStatusCancelled:
+		if errMsg != "" {
+			updates["error_msg"] = errMsg
+		}
+	}
+	// 仅首次进入 sent 时写入 sent_at，送达/点击回执不得改写
+	if status == domain.PushStatusSent && rec.SentAt == nil {
+		now := time.Now()
+		updates["sent_at"] = now
+	}
+	return r.db.WithContext(ctx).Model(&domain.PushRecord{}).Where("id = ?", id).Updates(updates).Error
+}
+
+func (r *PushRepo) GetRecordByProviderID(ctx context.Context, providerID string) (*domain.PushRecord, error) {
+	var rec domain.PushRecord
+	if err := r.db.WithContext(ctx).Where("provider_id = ?", providerID).First(&rec).Error; err != nil {
+		return nil, err
+	}
+	return &rec, nil
+}
+
+func (r *PushRepo) CreateReceipt(ctx context.Context, receipt *domain.PushReceipt) error {
+	if receipt == nil {
+		return fmt.Errorf("nil receipt")
+	}
+	var n int64
+	if err := r.db.WithContext(ctx).Model(&domain.PushReceipt{}).
+		Where("push_record_id = ? AND event = ?", receipt.PushRecordID, receipt.Event).
+		Count(&n).Error; err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil
+	}
+	return r.db.WithContext(ctx).Create(receipt).Error
+}
+
+func (r *PushRepo) ListFailedUserIDs(ctx context.Context, mainTaskID uint64) ([]string, error) {
+	var ids []string
+	// 有失败流水、且该活动下无任何渠道成功投递的用户
+	err := r.db.WithContext(ctx).Raw(`
+SELECT DISTINCT f.user_id
+FROM push_records f
+WHERE f.main_task_id = ? AND f.status = ?
+  AND NOT EXISTS (
+    SELECT 1 FROM push_records s
+    WHERE s.main_task_id = f.main_task_id
+      AND s.user_id = f.user_id
+      AND s.status IN (?, ?, ?)
+  )
+`, mainTaskID, domain.PushStatusFailed,
+		domain.PushStatusSent, domain.PushStatusDelivered, domain.PushStatusClicked,
+	).Scan(&ids).Error
+	return ids, err
+}
+
+func (r *PushRepo) CountUserOutcomes(ctx context.Context, mainTaskID uint64) (port.UserPushOutcomes, error) {
+	var out port.UserPushOutcomes
+	var n int64
+	if err := r.db.WithContext(ctx).Model(&domain.PushRecord{}).
+		Where("main_task_id = ?", mainTaskID).
+		Count(&n).Error; err != nil {
+		return out, err
+	}
+	out.HasRecords = n > 0
+	if !out.HasRecords {
+		return out, nil
+	}
+	if err := r.db.WithContext(ctx).Raw(`
+SELECT COUNT(DISTINCT user_id) FROM push_records
+WHERE main_task_id = ? AND status IN (?, ?, ?)
+`, mainTaskID, domain.PushStatusSent, domain.PushStatusDelivered, domain.PushStatusClicked).
+		Scan(&out.SuccessUsers).Error; err != nil {
+		return out, err
+	}
+	failed, err := r.ListFailedUserIDs(ctx, mainTaskID)
+	if err != nil {
+		return out, err
+	}
+	out.FailUsers = int64(len(failed))
+	return out, nil
+}
+
+const deliveryInFlightStale = 2 * time.Minute
+
+// ClaimDelivery 按用户+活动+渠道占位发送。
+// duplicate：已成功投递，应跳过；inFlight：另一实例正在发送，宜稍后重试。
+func (r *PushRepo) ClaimDelivery(ctx context.Context, rec *domain.PushRecord) (id uint64, duplicate, inFlight bool, err error) {
+	if rec == nil {
+		return 0, false, false, fmt.Errorf("nil push record")
+	}
+	rec.Status = domain.PushStatusSending
+	rec.ErrorMsg = ""
+	rec.ProviderID = ""
+
+	err = r.db.WithContext(ctx).Create(rec).Error
+	if err == nil {
+		return rec.ID, false, false, nil
+	}
+	if !isDuplicateKey(err) {
+		return 0, false, false, err
+	}
+
+	var existing domain.PushRecord
+	if err := r.db.WithContext(ctx).
+		Where("main_task_id = ? AND user_id = ? AND channel = ?", rec.MainTaskID, rec.UserID, rec.Channel).
+		First(&existing).Error; err != nil {
+		return 0, false, false, err
+	}
+
+	if existing.Status.DeliveredOK() {
+		return existing.ID, true, false, nil
+	}
+
+	if existing.Status == domain.PushStatusSending && time.Since(existing.UpdatedAt) < deliveryInFlightStale {
+		return existing.ID, false, true, nil
+	}
+
+	reclaimStatuses := []domain.PushStatus{
+		domain.PushStatusFailed,
+		domain.PushStatusCancelled,
+		domain.PushStatusQueued,
+		domain.PushStatusSending, // 陈旧 sending 可抢占
+	}
+	res := r.db.WithContext(ctx).Model(&domain.PushRecord{}).
+		Where("id = ? AND status IN ?", existing.ID, reclaimStatuses).
+		Updates(map[string]any{
+			"sub_task_id": rec.SubTaskID,
+			"content":     rec.Content,
+			"status":      domain.PushStatusSending,
+			"provider_id": "",
+			"error_msg":   "",
+			"sent_at":     nil,
+		})
+	if res.Error != nil {
+		return 0, false, false, res.Error
+	}
+	if res.RowsAffected == 0 {
+		// 竞态：重新读取
+		if err := r.db.WithContext(ctx).First(&existing, existing.ID).Error; err != nil {
+			return 0, false, false, err
+		}
+		if existing.Status.DeliveredOK() {
+			return existing.ID, true, false, nil
+		}
+		return existing.ID, false, true, nil
+	}
+	return existing.ID, false, false, nil
+}
+
+func isDuplicateKey(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, gorm.ErrDuplicatedKey) {
+		return true
+	}
+	var mysqlErr *mysqldriver.MySQLError
+	if errors.As(err, &mysqlErr) {
+		return mysqlErr.Number == 1062
+	}
+	return false
+}

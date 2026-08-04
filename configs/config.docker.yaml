@@ -1,0 +1,86 @@
+server:
+  addr: ":8080"
+  mode: release
+
+mysql:
+  dsn: "root:root@tcp(mysql:3306)/starlink?charset=utf8mb4&parseTime=True&loc=Local"
+  max_idle: 10
+  max_open: 50
+
+redis:
+  addr: "redis:6379"
+  password: ""
+  db: 0
+
+mq:
+  driver: redis_stream
+  high:
+    topic: "starlink:push:high"
+    group: "pushers-high"
+  normal:
+    topic: "starlink:push:normal"
+    group: "pushers-normal"
+  high_biz_scenes:
+    - txn
+    - otp
+    - security
+    - payment
+    - transactional
+  redis_stream:
+    claim_min_idle_ms: 30000
+    claim_batch: 16
+    max_delivery: 5
+    dlq_suffix: ":dlq"
+    maxlen: 100000
+    dlq_maxlen: 0
+    maxlen_approx: true
+    trim_interval_sec: 60
+    ack_xdel: true
+
+scheduler:
+  batch_size: 200
+  worker_concurrency: 8
+  poll_interval_ms: 500
+  claim_timeout_sec: 60
+  split_lease_sec: 90
+
+pusher:
+  worker_concurrency: 16
+  high_worker_concurrency: 32
+  rate_limit_qps: 500
+  max_retry: 3
+  dedup_ttl_sec: 604800
+
+campaign:
+  default_channel: "inbox"
+
+channel_quota:
+  enabled: true
+  distributed: true
+  redis_key_prefix: "starlink:quota:"
+  wait_timeout_ms: 2000
+  global_qps: 2000
+  over_capacity_action: warn
+  backpressure:
+    enabled: true
+    high_watermark: 0.80
+    low_watermark: 0.50
+    slowdown_factor: 0.3
+    default_pace_when_throttled: 50
+    sustain_sec: 15
+  adaptive:
+    enabled: true
+    shrink_factor: 0.5
+    recover_interval_sec: 60
+  channels:
+    sms: { qps: 100, burst: 50, high_reserve_ratio: 0.30, admission: soft }
+    app_push: { qps: 800, burst: 200, high_reserve_ratio: 0.25, admission: soft }
+    wecom: { qps: 200, burst: 100, high_reserve_ratio: 0.20, admission: soft }
+    dingtalk: { qps: 50, burst: 20, high_reserve_ratio: 0.20, admission: soft }
+    inbox: { qps: 1000, burst: 500, high_reserve_ratio: 0.10, admission: soft }
+    email: { qps: 200, burst: 100, high_reserve_ratio: 0.20, admission: soft }
+
+webhook:
+  enabled: true
+  default_url: ""
+  timeout_sec: 5

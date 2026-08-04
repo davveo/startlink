@@ -1,0 +1,165 @@
+server:
+  addr: ":8080"
+  mode: debug # debug | release
+
+mysql:
+  dsn: "root:root@tcp(127.0.0.1:3306)/starlink?charset=utf8mb4&parseTime=True&loc=Local"
+  max_idle: 10
+  max_open: 50
+
+redis:
+  addr: "127.0.0.1:6379"
+  password: ""
+  db: 0
+
+# MQ：可插拔驱动（redis_stream | rocketmq | memory）；事务(high) / 营销(normal) 独立队列
+mq:
+  driver: redis_stream
+  high:
+    topic: "starlink:push:high"    # Redis 下即 Stream 名；RocketMQ 下即 Topic
+    group: "pushers-high"
+  normal:
+    topic: "starlink:push:normal"
+    group: "pushers-normal"
+  # 未显式传 priority 时，这些 biz_scene 自动走高优队列
+  high_biz_scenes:
+    - txn
+    - otp
+    - security
+    - payment
+    - transactional
+  # redis_stream：PEL 重投 / DLQ / 容量治理
+  redis_stream:
+    claim_min_idle_ms: 30000   # PEL 空闲超过该时间才可被 XAUTOCLAIM
+    claim_batch: 16            # 每轮最多认领条数
+    max_delivery: 5            # 达到后写入 topic:dlq 并 ACK
+    dlq_suffix: ":dlq"         # 如 starlink:push:high:dlq
+    maxlen: 100000             # 主队列上限；-1 关闭
+    dlq_maxlen: 0              # 0=跟随 maxlen；-1 关闭；>0 独立上限
+    maxlen_approx: true        # MAXLEN ~ 近似裁剪
+    trim_interval_sec: 60      # 消费侧定期 XTRIM；-1 关闭
+    ack_xdel: true             # ACK 后 XDEL 释放条目内存
+  # driver: rocketmq 时使用（需 go build -tags rocketmq，并配置 name_servers）
+  # rocketmq:
+  #   name_servers: ["127.0.0.1:9876"]
+  #   access_key: ""
+  #   secret_key: ""
+  #   namespace: ""
+  #   retry: 2
+  # driver: memory 时使用
+  # memory:
+  #   buffer_size: 4096
+
+scheduler:
+  batch_size: 200          # 每个子任务用户数
+  worker_concurrency: 8    # 单实例并发处理子任务数
+  split_concurrency: 2     # 同实例并行拆分活动数
+  poll_interval_ms: 500
+  claim_timeout_sec: 60    # 子任务认领超时，超时后可被其他实例接管
+  split_lease_sec: 90      # 拆分租约；流式拆分中途崩溃后可重拆（先清半成品）
+
+pusher:
+  worker_concurrency: 16           # 普通队列（营销）并发
+  high_worker_concurrency: 32      # 高优队列（事务）并发
+  rate_limit_qps: 500
+  max_retry: 3
+  dedup_ttl_sec: 604800   # 用户+活动+渠道去重标记 TTL（7 天）
+  # 渠道发送器：默认 stub；mode=http 时 POST SendRequest JSON → SendResult（含 Retryable）
+  # channels:
+  #   sms: { mode: http, url: "http://127.0.0.1:9091/send/sms", timeout_sec: 5 }
+  #   app_push: { mode: http, url: "http://127.0.0.1:9091/send/app_push" }
+  #   wecom: { mode: stub }
+  #   dingtalk: { mode: stub }
+
+campaign:
+  default_channel: "inbox"
+
+# 人群 Provider：HTTP 真实圈人优先；Demo 仅支持 demo/dev，不再兜底所有 biz_scene
+audience:
+  demo_enabled: true
+  demo_scenes: [demo, dev]
+  http:
+    enabled: false
+    url: "http://127.0.0.1:9090/audience/resolve"
+    scenes: []          # 空=enabled 时承接所有非 demo 场景
+    timeout_sec: 10
+
+# 频控 / 免打扰（Pusher Gateway 调用 AggregatorCache.Allow）
+freq:
+  enabled: false
+  user_limit: 20
+  user_window_sec: 86400
+  user_channel_limit: 10
+  user_channel_window_sec: 86400
+  scene_limit: 100000
+  scene_window_sec: 86400
+  quiet_hours:
+    enabled: false
+    start: "22:00"
+    end: "08:00"
+    scenes: [marketing, demo]
+
+# 黑名单 / 退订（Redis SET）
+compliance:
+  blacklist_key: "starlink:blacklist"
+  unsubscribe_key_prefix: "starlink:unsub:"
+
+# 渠道配额限流：按 channel × priority；超额排队（PEL），合同渠道可拒创
+# enabled=false 时回退为 pusher.rate_limit_qps 进程内全局桶
+channel_quota:
+  enabled: true
+  distributed: true
+  redis_key_prefix: "starlink:quota:"
+  wait_timeout_ms: 2000
+  global_qps: 2000          # 0 则回退 rate_limit_qps
+  over_capacity_action: warn  # warn | pause（仅 admission=enforce）
+  backpressure:
+    enabled: true
+    high_watermark: 0.80
+    low_watermark: 0.50
+    slowdown_factor: 0.3
+    default_pace_when_throttled: 50
+    sustain_sec: 15
+  adaptive:
+    enabled: true
+    vendor_throttle_rate: 0.05
+    shrink_factor: 0.5
+    recover_interval_sec: 60
+  channels:
+    sms:
+      qps: 100
+      burst: 50
+      high_reserve_ratio: 0.30
+      admission: soft
+      target_finish_minutes: 60
+    app_push:
+      qps: 800
+      burst: 200
+      high_reserve_ratio: 0.25
+      admission: soft
+    wecom:
+      qps: 200
+      burst: 100
+      high_reserve_ratio: 0.20
+      admission: soft
+    dingtalk:
+      qps: 50
+      burst: 20
+      high_reserve_ratio: 0.20
+      admission: soft
+    inbox:
+      qps: 1000
+      burst: 500
+      high_reserve_ratio: 0.10
+      admission: soft
+    email:
+      qps: 200
+      burst: 100
+      high_reserve_ratio: 0.20
+      admission: soft
+
+# 任务终态回调（success/partial/failed/cancelled）
+webhook:
+  enabled: true
+  default_url: ""          # 全局默认；创建活动时可传 webhook_url 覆盖
+  timeout_sec: 5

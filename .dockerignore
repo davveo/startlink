@@ -1,0 +1,12 @@
+.git
+.gitignore
+.idea
+.vscode
+bin
+*.md
+*.log
+*.test
+*.out
+docs
+agent-transcripts
+.dockerignore

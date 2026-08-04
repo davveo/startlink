@@ -1,0 +1,9 @@
+# starlink
+bin/
+*.exe
+*.test
+*.out
+.idea/
+.vscode/
+*.log
+vendor/
