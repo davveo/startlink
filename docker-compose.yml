@@ -1,0 +1,94 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: starlink-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: starlink
+      TZ: Asia/Shanghai
+    ports:
+      - "3306:3306"
+    volumes:
+      - starlink-mysql-data:/var/lib/mysql
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-authentication-plugin=mysql_native_password
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  redis:
+    image: redis:7-alpine
+    container_name: starlink-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - starlink-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: starlink:latest
+    container_name: starlink-api
+    restart: unless-stopped
+    environment:
+      APP: api
+      CONFIG: /app/configs/config.yaml
+      TZ: Asia/Shanghai
+    ports:
+      - "8080:8080"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: starlink:latest
+    container_name: starlink-scheduler
+    restart: unless-stopped
+    environment:
+      APP: scheduler
+      CONFIG: /app/configs/config.yaml
+      TZ: Asia/Shanghai
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  pusher:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: starlink:latest
+    container_name: starlink-pusher
+    restart: unless-stopped
+    environment:
+      APP: pusher
+      CONFIG: /app/configs/config.yaml
+      TZ: Asia/Shanghai
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  starlink-mysql-data:
+  starlink-redis-data:
