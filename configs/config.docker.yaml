@@ -6,6 +6,15 @@ log:
   level: info
   format: text
 
+auth:
+  enabled: true
+  session_secret: "change-me-in-production"
+  cookie_name: starlink_session
+  ttl_hours: 24
+  users:
+    - username: admin
+      password: admin123
+
 mysql:
   dsn: "root:root@tcp(mysql:3306)/starlink?charset=utf8mb4&parseTime=True&loc=Local"
   max_idle: 10

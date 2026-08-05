@@ -11,6 +11,7 @@ import (
 type Config struct {
 	Server       ServerConfig       `yaml:"server"`
 	Log          LogConfig          `yaml:"log"`
+	Auth         AuthConfig         `yaml:"auth"`
 	MySQL        MySQLConfig        `yaml:"mysql"`
 	Redis        RedisConfig        `yaml:"redis"`
 	MQ           MQConfig           `yaml:"mq"`
@@ -22,6 +23,20 @@ type Config struct {
 	Freq         FreqConfig         `yaml:"freq"`
 	Compliance   ComplianceConfig   `yaml:"compliance"`
 	ChannelQuota ChannelQuotaConfig `yaml:"channel_quota"`
+}
+
+// AuthConfig 运营台登录门禁（配置文件账号 + 签名 Session Cookie）
+type AuthConfig struct {
+	Enabled       bool       `yaml:"enabled"`
+	SessionSecret string     `yaml:"session_secret"`
+	CookieName    string     `yaml:"cookie_name"`
+	TTLHours      int        `yaml:"ttl_hours"`
+	Users         []AuthUser `yaml:"users"`
+}
+
+type AuthUser struct {
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
 }
 
 // LogConfig 全局日志
@@ -272,6 +287,16 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Log.Format == "" {
 		c.Log.Format = "text"
+	}
+	// auth：未配置 cookie/ttl/secret 时补默认；users 空且 enabled 时不自动造账号（需 YAML 显式配置）
+	if c.Auth.CookieName == "" {
+		c.Auth.CookieName = "starlink_session"
+	}
+	if c.Auth.TTLHours <= 0 {
+		c.Auth.TTLHours = 24
+	}
+	if c.Auth.SessionSecret == "" {
+		c.Auth.SessionSecret = "change-me-in-production"
 	}
 	if c.Scheduler.BatchSize <= 0 {
 		c.Scheduler.BatchSize = 200

@@ -6,6 +6,17 @@ log:
   level: info   # debug | info | warn | error
   format: text  # text | json；text 形如：2026-08-05 18:52:26 [INFO] msg key=value
 
+# 运营台登录门禁：配置文件账号 + HMAC 签名 Session Cookie（无 users 表）
+# enabled=false 时跳过中间件（单测/紧急排障）；生产务必改密并更换 session_secret
+auth:
+  enabled: true
+  session_secret: "change-me-in-production"
+  cookie_name: starlink_session
+  ttl_hours: 24
+  users:
+    - username: admin
+      password: admin123
+
 mysql:
   dsn: "root:root@tcp(127.0.0.1:3306)/starlink?charset=utf8mb4&parseTime=True&loc=Local"
   max_idle: 10
