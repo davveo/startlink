@@ -1,8 +1,24 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { useParams } from 'react-router-dom'
 import { ApiError, api } from '../api/client'
 import type { SubTaskListResult, SubTaskView, TaskStatus } from '../api/types'
 import { StatusChip } from '../components/StatusChip'
+import {
+  BtnRow,
+  Button,
+  ButtonLink,
+  Empty,
+  Field,
+  Mono,
+  PageHead,
+  Panel,
+  Select,
+  Stat,
+  TableWrap,
+  Td,
+  Th,
+  Toast,
+} from '../components/ui'
 
 function formatTime(v?: string) {
   if (!v) return '-'
@@ -50,7 +66,13 @@ export function SubTasksPage() {
   }, [load])
 
   useEffect(() => {
-    if (!data || data.status === 'success' || data.status === 'partial' || data.status === 'failed' || data.status === 'cancelled') {
+    if (
+      !data ||
+      data.status === 'success' ||
+      data.status === 'partial' ||
+      data.status === 'failed' ||
+      data.status === 'cancelled'
+    ) {
       return
     }
     const timer = window.setInterval(() => {
@@ -63,58 +85,51 @@ export function SubTasksPage() {
 
   return (
     <div>
-      <div className="page-head">
-        <div>
-          <h1>子任务</h1>
-          <p>
-            {data ? (
-              <>
-                主任务 #{data.main_task_id} · {data.title} ·{' '}
-                <span className="mono">{data.biz_id}</span>
-              </>
-            ) : (
-              <>主任务 #{mainTaskId}</>
-            )}
-          </p>
-        </div>
-        <div className="btn-row">
-          <Link className="btn btn-ghost" to="/tasks">
-            返回列表
-          </Link>
-          <Link className="btn btn-ink" to={`/campaigns?task=${mainTaskId}`}>
-            活动进度
-          </Link>
-        </div>
-      </div>
+      <PageHead
+        title="子任务"
+        description={
+          data ? (
+            <>
+              主任务 #{data.main_task_id} · {data.title} · <Mono>{data.biz_id}</Mono>
+            </>
+          ) : (
+            <>主任务 #{mainTaskId}</>
+          )
+        }
+        actions={
+          <>
+            <ButtonLink to="/tasks" variant="ghost">
+              返回列表
+            </ButtonLink>
+            <ButtonLink to={`/campaigns?task=${mainTaskId}`} variant="ink">
+              活动进度
+            </ButtonLink>
+          </>
+        }
+      />
 
-      {err ? <div className="toast toast-error">{err}</div> : null}
+      {err ? <Toast kind="error">{err}</Toast> : null}
 
       {data ? (
-        <div className="grid-3" style={{ marginBottom: '1rem' }}>
-          <div className="stat">
-            <div className="label">主任务状态</div>
-            <div style={{ marginTop: '0.45rem' }}>
+        <div className="mb-4 grid gap-3.5 md:grid-cols-3">
+          <Stat label="主任务状态">
+            <div className="mt-1">
               <StatusChip status={data.status} />
             </div>
-          </div>
-          <div className="stat">
-            <div className="label">子任务总数</div>
-            <div className="value">{data.total}</div>
-          </div>
-          <div className="stat">
-            <div className="label">当前页</div>
-            <div className="value" style={{ fontSize: '1.2rem', marginTop: '0.55rem' }}>
+          </Stat>
+          <Stat label="子任务总数">{data.total}</Stat>
+          <Stat label="当前页">
+            <span className="text-[1.2rem]">
               {page} / {totalPages}
-            </div>
-          </div>
+            </span>
+          </Stat>
         </div>
       ) : null}
 
-      <div className="panel">
-        <div className="grid-2">
-          <div className="field">
-            <label>子任务状态筛选</label>
-            <select
+      <Panel>
+        <div className="grid gap-4 md:grid-cols-2">
+          <Field label="子任务状态筛选">
+            <Select
               value={status}
               onChange={(e) => {
                 setPage(1)
@@ -128,131 +143,120 @@ export function SubTasksPage() {
               <option value="failed">failed</option>
               <option value="cancelled">cancelled</option>
               <option value="retrying">retrying</option>
-            </select>
-          </div>
-          <div className="field">
-            <label>&nbsp;</label>
-            <button className="btn btn-ink" type="button" disabled={busy} onClick={() => void load()}>
+            </Select>
+          </Field>
+          <div className="flex items-end pb-3.5">
+            <Button variant="ink" type="button" disabled={busy} onClick={() => void load()}>
               刷新
-            </button>
+            </Button>
           </div>
         </div>
 
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>子任务 ID</th>
-                <th>分片</th>
-                <th>状态</th>
-                <th>用户数</th>
-                <th>成功/失败</th>
-                <th>重试</th>
-                <th>Worker</th>
-                <th>时间</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {(data?.items ?? []).map((st) => (
-                <tr key={st.id}>
-                  <td className="mono">{st.id}</td>
-                  <td className="mono">{st.shard_index}</td>
-                  <td>
-                    <StatusChip status={st.status} />
-                    {st.last_error ? (
-                      <div>
-                        <small style={{ color: 'var(--rose)' }}>{st.last_error}</small>
-                      </div>
-                    ) : null}
-                  </td>
-                  <td className="mono">{st.total_count}</td>
-                  <td className="mono">
+        <TableWrap>
+          <thead>
+            <tr>
+              <Th>子任务 ID</Th>
+              <Th>分片</Th>
+              <Th>状态</Th>
+              <Th>用户数</Th>
+              <Th>成功/失败</Th>
+              <Th>重试</Th>
+              <Th>Worker</Th>
+              <Th>时间</Th>
+              <Th />
+            </tr>
+          </thead>
+          <tbody>
+            {(data?.items ?? []).map((st) => (
+              <tr key={st.id} className="hover:bg-white/50">
+                <Td>
+                  <Mono>{st.id}</Mono>
+                </Td>
+                <Td>
+                  <Mono>{st.shard_index}</Mono>
+                </Td>
+                <Td>
+                  <StatusChip status={st.status} />
+                  {st.last_error ? <div className="mt-1 text-xs text-rose">{st.last_error}</div> : null}
+                </Td>
+                <Td>
+                  <Mono>{st.total_count}</Mono>
+                </Td>
+                <Td>
+                  <Mono>
                     {st.success_count}/{st.fail_count}
-                  </td>
-                  <td className="mono">{st.retry_count}</td>
-                  <td className="mono">{st.worker_id || '-'}</td>
-                  <td>
-                    <small>开始 {formatTime(st.started_at)}</small>
-                    <div>
-                      <small>结束 {formatTime(st.finished_at)}</small>
-                    </div>
-                  </td>
-                  <td>
-                    <button className="btn btn-ghost" type="button" onClick={() => setSelected(st)}>
-                      详情
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {(data?.items?.length ?? 0) === 0 ? <div className="empty">暂无子任务（可能尚未拆分完成）</div> : null}
-        </div>
+                  </Mono>
+                </Td>
+                <Td>
+                  <Mono>{st.retry_count}</Mono>
+                </Td>
+                <Td>
+                  <Mono>{st.worker_id || '-'}</Mono>
+                </Td>
+                <Td>
+                  <div className="text-xs">开始 {formatTime(st.started_at)}</div>
+                  <div className="text-xs">结束 {formatTime(st.finished_at)}</div>
+                </Td>
+                <Td>
+                  <Button variant="ghost" type="button" onClick={() => setSelected(st)}>
+                    详情
+                  </Button>
+                </Td>
+              </tr>
+            ))}
+          </tbody>
+        </TableWrap>
+        {(data?.items?.length ?? 0) === 0 ? <Empty>暂无子任务（可能尚未拆分完成）</Empty> : null}
 
-        <div className="btn-row" style={{ marginTop: '1rem', justifyContent: 'space-between' }}>
-          <span style={{ color: 'var(--muted)' }}>
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+          <span className="text-sm text-muted">
             第 {page} / {totalPages} 页
           </span>
-          <div className="btn-row">
-            <button
-              className="btn btn-ghost"
+          <BtnRow>
+            <Button
+              variant="ghost"
               type="button"
               disabled={busy || page <= 1}
               onClick={() => setPage((p) => Math.max(1, p - 1))}
             >
               上一页
-            </button>
-            <button
-              className="btn btn-ghost"
+            </Button>
+            <Button
+              variant="ghost"
               type="button"
               disabled={busy || page >= totalPages}
               onClick={() => setPage((p) => p + 1)}
             >
               下一页
-            </button>
-          </div>
+            </Button>
+          </BtnRow>
         </div>
-      </div>
+      </Panel>
 
       {selected ? (
-        <div className="panel">
-          <h2>子任务 #{selected.id}</h2>
-          <div className="grid-2">
-            <div>
-              <p>
-                <StatusChip status={selected.status} />
-              </p>
-              <p className="mono">
+        <Panel className="mt-4">
+          <h2 className="mb-4 text-lg font-semibold">子任务 #{selected.id}</h2>
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-2">
+              <StatusChip status={selected.status} />
+              <p className="font-mono text-sm">
                 shard={selected.shard_index} · users={selected.total_count} · ok=
                 {selected.success_count} · fail={selected.fail_count} · retry={selected.retry_count}
               </p>
-              <p className="mono" style={{ color: 'var(--muted)' }}>
-                worker={selected.worker_id || '-'}
-              </p>
-              {selected.last_error ? (
-                <p style={{ color: 'var(--rose)' }}>错误：{selected.last_error}</p>
-              ) : null}
+              <p className="font-mono text-sm text-muted">worker={selected.worker_id || '-'}</p>
+              {selected.last_error ? <p className="text-rose">错误：{selected.last_error}</p> : null}
             </div>
-            <div>
-              <p>
-                <small>认领：{formatTime(selected.claimed_at)}</small>
-              </p>
-              <p>
-                <small>开始：{formatTime(selected.started_at)}</small>
-              </p>
-              <p>
-                <small>结束：{formatTime(selected.finished_at)}</small>
-              </p>
-              <p>
-                <small>更新：{formatTime(selected.updated_at)}</small>
-              </p>
-              <button className="btn btn-ghost" type="button" onClick={() => setSelected(null)}>
+            <div className="space-y-2 text-sm text-muted">
+              <p>认领：{formatTime(selected.claimed_at)}</p>
+              <p>开始：{formatTime(selected.started_at)}</p>
+              <p>结束：{formatTime(selected.finished_at)}</p>
+              <p>更新：{formatTime(selected.updated_at)}</p>
+              <Button variant="ghost" type="button" onClick={() => setSelected(null)}>
                 关闭
-              </button>
+              </Button>
             </div>
           </div>
-        </div>
+        </Panel>
       ) : null}
     </div>
   )

@@ -115,11 +115,24 @@ api ───────────────► MySQL
 
 ### Docker Compose（推荐）
 
+用 Makefile 管理全栈（推荐）：
+
+```bash
+make up          # 或 make start：构建并启动
+make status      # 或 make ps：查看状态
+make logs        # 跟踪 api / scheduler / pusher / web 日志
+make down        # 或 make stop：停止（保留数据卷）
+make help        # 查看全部 Docker 命令
+```
+
+等价裸命令：
+
 ```bash
 docker compose up -d --build
 curl http://localhost:8080/healthz
 open http://localhost:3000
 docker compose logs -f api scheduler pusher web
+docker compose down
 ```
 
 默认会启动：
@@ -131,15 +144,9 @@ docker compose logs -f api scheduler pusher web
 | MySQL | `localhost:3306/starlink` | `root` / `root` |
 | Redis | `localhost:6379` | 无密码 |
 
-注意：仅 `api` 服务声明后端 `build` 并产出 `starlink:latest`；`scheduler` / `pusher` 复用该镜像，并等待 `api` healthy 后再启动。前端为独立镜像 `starlink-web:latest`（`web/Dockerfile`），nginx 将 `/api` 反代到 `api:8080`。若只想重建后端：`docker compose build api`；只重建前端：`docker compose build web`。
+注意：仅 `api` 服务声明后端 `build` 并产出 `starlink:latest`；`scheduler` / `pusher` 复用该镜像，并等待 `api` healthy 后再启动。前端为独立镜像 `starlink-web:latest`（`web/Dockerfile`），nginx 将 `/api` 反代到 `api:8080`。仅重建后端：`make rebuild-api`；仅重建前端：`make rebuild-web`。
 
-停止服务：
-
-```bash
-docker compose down
-```
-
-同时删除本地 MySQL/Redis 数据卷需显式执行 `docker compose down -v`；此操作不可恢复。
+删除本地 MySQL/Redis 数据卷：`make down-v`（等同 `docker compose down -v`，不可恢复）。
 
 ### 本地运行
 

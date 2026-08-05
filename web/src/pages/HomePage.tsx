@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
 import { ApiError, api } from '../api/client'
 import type { ChannelType } from '../api/types'
+import { BtnRow, ButtonLink, Chip, Empty, Mono, Panel, PanelTitle, Stat, Toast } from '../components/ui'
 
 export function HomePage() {
   const [channels, setChannels] = useState<ChannelType[]>([])
@@ -29,55 +29,50 @@ export function HomePage() {
 
   return (
     <div>
-      <section className="hero">
-        <h1>STARLINK 推送运营台</h1>
-        <p>管理模板审核、创建投放活动、追踪进度与失败重推。对接现有 /api/v1，适合本地联调与运营试跑。</p>
-        <div className="hero-actions">
-          <Link className="btn btn-primary" to="/campaigns">
+      <section className="grid animate-rise gap-4 py-6 pb-6">
+        <h1 className="max-w-[14ch] text-[clamp(2.4rem,5vw,3.6rem)] font-extrabold leading-[0.98] tracking-tight">
+          STARLINK 推送运营台
+        </h1>
+        <p className="m-0 max-w-[42ch] text-[1.05rem] text-muted">
+          管理模板审核、创建投放活动、追踪进度与失败重推。对接现有 /api/v1，适合本地联调与运营试跑。
+        </p>
+        <BtnRow className="mt-2">
+          <ButtonLink to="/campaigns" variant="primary">
             创建活动
-          </Link>
-          <Link className="btn btn-ink" to="/tasks">
+          </ButtonLink>
+          <ButtonLink to="/tasks" variant="ink">
             任务列表
-          </Link>
-          <Link className="btn btn-ghost" to="/templates">
+          </ButtonLink>
+          <ButtonLink to="/templates" variant="ghost">
             模板中心
-          </Link>
-        </div>
+          </ButtonLink>
+        </BtnRow>
       </section>
 
-      {error ? <div className="toast toast-error">{error}</div> : null}
+      {error ? <Toast kind="error">{error}</Toast> : null}
 
-      <div className="grid-3">
-        <div className="stat">
-          <div className="label">API 健康</div>
-          <div className="value">{health}</div>
-        </div>
-        <div className="stat">
-          <div className="label">已注册渠道</div>
-          <div className="value">{channels.length}</div>
-        </div>
-        <div className="stat">
-          <div className="label">默认队列</div>
-          <div className="value" style={{ fontSize: '1.15rem', marginTop: '0.55rem' }}>
-            high / normal
-          </div>
-        </div>
+      <div className="grid gap-3.5 md:grid-cols-3">
+        <Stat label="API 健康">{health}</Stat>
+        <Stat label="已注册渠道">{channels.length}</Stat>
+        <Stat label="默认队列">
+          <span className="text-[1.15rem]">high / normal</span>
+        </Stat>
       </div>
 
-      <div className="panel" style={{ marginTop: '1rem' }}>
-        <h2>渠道清单</h2>
+      <Panel className="mt-4">
+        <PanelTitle>渠道清单</PanelTitle>
         {channels.length === 0 ? (
-          <div className="empty">暂无渠道数据</div>
+          <Empty>暂无渠道数据</Empty>
         ) : (
-          <div className="btn-row">
+          <BtnRow>
             {channels.map((c) => (
-              <span key={c} className="chip chip-teal mono">
-                {c}
-              </span>
+              <Chip key={c} tone="teal">
+                <Mono>{c}</Mono>
+              </Chip>
             ))}
-          </div>
+          </BtnRow>
         )}
-      </div>
+      </Panel>
     </div>
   )
 }

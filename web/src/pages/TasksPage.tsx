@@ -1,8 +1,23 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
 import { ApiError, api } from '../api/client'
 import type { CampaignListItem, TaskStatus } from '../api/types'
 import { StatusChip } from '../components/StatusChip'
+import {
+  BtnRow,
+  Button,
+  ButtonLink,
+  Empty,
+  Field,
+  Input,
+  Mono,
+  PageHead,
+  Panel,
+  Select,
+  TableWrap,
+  Td,
+  Th,
+  Toast,
+} from '../components/ui'
 
 function formatTime(v?: string) {
   if (!v) return '-'
@@ -52,23 +67,22 @@ export function TasksPage() {
 
   return (
     <div>
-      <div className="page-head">
-        <div>
-          <h1>任务列表</h1>
-          <p>查看主任务状态，进入子任务页追踪每个分片执行情况。共 {total} 条。</p>
-        </div>
-        <Link className="btn btn-primary" to="/campaigns">
-          创建活动
-        </Link>
-      </div>
+      <PageHead
+        title="任务列表"
+        description={`查看主任务状态，进入子任务页追踪每个分片执行情况。共 ${total} 条。`}
+        actions={
+          <ButtonLink to="/campaigns" variant="primary">
+            创建活动
+          </ButtonLink>
+        }
+      />
 
-      {err ? <div className="toast toast-error">{err}</div> : null}
+      {err ? <Toast kind="error">{err}</Toast> : null}
 
-      <div className="panel">
-        <div className="grid-3">
-          <div className="field">
-            <label>状态</label>
-            <select
+      <Panel>
+        <div className="grid gap-3.5 md:grid-cols-3">
+          <Field label="状态">
+            <Select
               value={status}
               onChange={(e) => {
                 setPage(1)
@@ -84,28 +98,22 @@ export function TasksPage() {
               <option value="failed">failed</option>
               <option value="cancelled">cancelled</option>
               <option value="retrying">retrying</option>
-            </select>
-          </div>
-          <div className="field">
-            <label>biz_scene</label>
-            <input
-              value={bizScene}
-              onChange={(e) => setBizScene(e.target.value)}
-              placeholder="demo"
-            />
-          </div>
-          <div className="field">
-            <label>关键词（biz_id / title）</label>
-            <input
+            </Select>
+          </Field>
+          <Field label="biz_scene">
+            <Input value={bizScene} onChange={(e) => setBizScene(e.target.value)} placeholder="demo" />
+          </Field>
+          <Field label="关键词（biz_id / title）">
+            <Input
               value={keyword}
               onChange={(e) => setKeyword(e.target.value)}
               placeholder="camp- / Demo"
             />
-          </div>
+          </Field>
         </div>
-        <div className="btn-row">
-          <button
-            className="btn btn-ink"
+        <BtnRow>
+          <Button
+            variant="ink"
             type="button"
             disabled={busy}
             onClick={() => {
@@ -114,104 +122,108 @@ export function TasksPage() {
             }}
           >
             查询
-          </button>
-          <button className="btn btn-ghost" type="button" disabled={busy} onClick={() => void load()}>
+          </Button>
+          <Button variant="ghost" type="button" disabled={busy} onClick={() => void load()}>
             刷新
-          </button>
-        </div>
-      </div>
+          </Button>
+        </BtnRow>
+      </Panel>
 
-      <div className="panel">
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>标题 / biz_id</th>
-                <th>场景</th>
-                <th>渠道</th>
-                <th>状态</th>
-                <th>用户</th>
-                <th>子任务</th>
-                <th>创建时间</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((t) => (
-                <tr key={t.id}>
-                  <td className="mono">{t.id}</td>
-                  <td>
-                    <div>{t.title}</div>
-                    <small className="mono" style={{ color: 'var(--muted)' }}>
-                      {t.biz_id}
-                    </small>
-                  </td>
-                  <td>{t.biz_scene}</td>
-                  <td className="mono">
+      <Panel className="mt-4">
+        <TableWrap>
+          <thead>
+            <tr>
+              <Th>ID</Th>
+              <Th>标题 / biz_id</Th>
+              <Th>场景</Th>
+              <Th>渠道</Th>
+              <Th>状态</Th>
+              <Th>用户</Th>
+              <Th>子任务</Th>
+              <Th>创建时间</Th>
+              <Th>操作</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((t) => (
+              <tr key={t.id} className="hover:bg-white/50">
+                <Td>
+                  <Mono>{t.id}</Mono>
+                </Td>
+                <Td>
+                  <div>{t.title}</div>
+                  <Mono className="text-muted">{t.biz_id}</Mono>
+                </Td>
+                <Td>{t.biz_scene}</Td>
+                <Td>
+                  <Mono>
                     {(t.channels && t.channels.length > 0 ? t.channels : [t.channel]).join(', ')}
-                    <div>
-                      <small style={{ color: 'var(--muted)' }}>
-                        {t.channel_mode} · {t.priority}
-                      </small>
-                    </div>
-                  </td>
-                  <td>
-                    <StatusChip status={t.status} />
-                  </td>
-                  <td className="mono">
+                  </Mono>
+                  <div>
+                    <span className="text-xs text-muted">
+                      {t.channel_mode} · {t.priority}
+                    </span>
+                  </div>
+                </Td>
+                <Td>
+                  <StatusChip status={t.status} />
+                </Td>
+                <Td>
+                  <Mono>
                     {t.success_count}/{t.fail_count}/{t.total_count}
-                    <div>
-                      <small style={{ color: 'var(--muted)' }}>成功/失败/总量</small>
-                    </div>
-                  </td>
-                  <td className="mono">
+                  </Mono>
+                  <div>
+                    <span className="text-xs text-muted">成功/失败/总量</span>
+                  </div>
+                </Td>
+                <Td>
+                  <Mono>
                     {t.sub_task_done}/{t.sub_task_total}
-                  </td>
-                  <td>
-                    <small>{formatTime(t.created_at)}</small>
-                  </td>
-                  <td>
-                    <div className="btn-row">
-                      <Link className="btn btn-primary" to={`/tasks/${t.id}/subtasks`}>
-                        子任务
-                      </Link>
-                      <Link className="btn btn-ghost" to={`/campaigns?task=${t.id}`}>
-                        进度
-                      </Link>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {items.length === 0 ? <div className="empty">暂无任务</div> : null}
-        </div>
+                  </Mono>
+                </Td>
+                <Td>
+                  <span className="text-xs">{formatTime(t.created_at)}</span>
+                </Td>
+                <Td>
+                  <BtnRow>
+                    <ButtonLink to={`/tasks/${t.id}/subtasks`} variant="primary">
+                      子任务
+                    </ButtonLink>
+                    <ButtonLink to={`/campaigns?task=${t.id}`} variant="ghost">
+                      进度
+                    </ButtonLink>
+                  </BtnRow>
+                </Td>
+              </tr>
+            ))}
+          </tbody>
+        </TableWrap>
+        {items.length === 0 ? <Empty>暂无任务</Empty> : null}
 
-        <div className="btn-row" style={{ marginTop: '1rem', justifyContent: 'space-between' }}>
-          <span style={{ color: 'var(--muted)' }}>
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+          <span className="text-sm text-muted">
             第 {page} / {totalPages} 页
           </span>
-          <div className="btn-row">
-            <button
-              className="btn btn-ghost"
+          <BtnRow>
+            <Button
+              variant="ghost"
               type="button"
               disabled={busy || page <= 1}
               onClick={() => setPage((p) => Math.max(1, p - 1))}
             >
               上一页
-            </button>
-            <button
-              className="btn btn-ghost"
+            </Button>
+            <Button
+              variant="ghost"
               type="button"
               disabled={busy || page >= totalPages}
               onClick={() => setPage((p) => p + 1)}
             >
               下一页
-            </button>
-          </div>
+            </Button>
+          </BtnRow>
         </div>
-      </div>
+      </Panel>
     </div>
   )
 }
