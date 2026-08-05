@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/starlink/push/internal/adapter/channel"
 	"github.com/starlink/push/internal/adapter/webhook"
 	"github.com/starlink/push/internal/domain"
 	"github.com/starlink/push/internal/port"
@@ -28,6 +29,9 @@ type Service struct {
 	batchSize      int
 	highBizScenes  []string
 	defaultChannel domain.ChannelType
+	audience       AudienceResolver
+	channels       *channel.Registry
+	exportDir      string
 }
 
 type Deps struct {
@@ -40,12 +44,19 @@ type Deps struct {
 	BatchSize      int
 	HighBizScenes  []string
 	DefaultChannel domain.ChannelType
+	Audience       AudienceResolver
+	Channels       *channel.Registry
+	ExportDir      string
 }
 
 func NewService(deps Deps) *Service {
 	bs := deps.BatchSize
 	if bs <= 0 {
 		bs = 200
+	}
+	exportDir := deps.ExportDir
+	if exportDir == "" {
+		exportDir = "data/exports"
 	}
 	return &Service{
 		tasks:          deps.Tasks,
@@ -57,6 +68,9 @@ func NewService(deps Deps) *Service {
 		batchSize:      bs,
 		highBizScenes:  deps.HighBizScenes,
 		defaultChannel: deps.DefaultChannel,
+		audience:       deps.Audience,
+		channels:       deps.Channels,
+		exportDir:      exportDir,
 	}
 }
 
@@ -67,26 +81,28 @@ type CreateResult struct {
 }
 
 type CampaignListItem struct {
-	ID           uint64              `json:"id"`
-	BizID        string              `json:"biz_id"`
-	BizScene     string              `json:"biz_scene"`
-	Title        string              `json:"title"`
-	Channel      domain.ChannelType  `json:"channel"`
+	ID           uint64               `json:"id"`
+	BizID        string               `json:"biz_id"`
+	BizScene     string               `json:"biz_scene"`
+	Title        string               `json:"title"`
+	Channel      domain.ChannelType   `json:"channel"`
 	Channels     []domain.ChannelType `json:"channels,omitempty"`
-	ChannelMode  domain.ChannelMode  `json:"channel_mode"`
-	Priority     domain.Priority     `json:"priority"`
-	TemplateID   string              `json:"template_id"`
-	Status       domain.TaskStatus   `json:"status"`
-	TotalCount   int64               `json:"total_count"`
-	SuccessCount int64               `json:"success_count"`
-	FailCount    int64               `json:"fail_count"`
-	SubTaskTotal int                 `json:"sub_task_total"`
-	SubTaskDone  int                 `json:"sub_task_done"`
-	ScheduledAt  *time.Time          `json:"scheduled_at,omitempty"`
-	StartedAt    *time.Time          `json:"started_at,omitempty"`
-	FinishedAt   *time.Time          `json:"finished_at,omitempty"`
-	CreatedAt    time.Time           `json:"created_at"`
-	UpdatedAt    time.Time           `json:"updated_at"`
+	ChannelMode  domain.ChannelMode   `json:"channel_mode"`
+	Priority     domain.Priority      `json:"priority"`
+	TemplateID   string               `json:"template_id"`
+	Status       domain.TaskStatus    `json:"status"`
+	CreatedBy    string               `json:"created_by,omitempty"`
+	CopiedFromID *uint64              `json:"copied_from_id,omitempty"`
+	TotalCount   int64                `json:"total_count"`
+	SuccessCount int64                `json:"success_count"`
+	FailCount    int64                `json:"fail_count"`
+	SubTaskTotal int                  `json:"sub_task_total"`
+	SubTaskDone  int                  `json:"sub_task_done"`
+	ScheduledAt  *time.Time           `json:"scheduled_at,omitempty"`
+	StartedAt    *time.Time           `json:"started_at,omitempty"`
+	FinishedAt   *time.Time           `json:"finished_at,omitempty"`
+	CreatedAt    time.Time            `json:"created_at"`
+	UpdatedAt    time.Time            `json:"updated_at"`
 }
 
 type CampaignListResult struct {
@@ -219,14 +235,21 @@ func (s *Service) Create(ctx context.Context, in domain.CreateCampaignInput) (*C
 
 	prio := domain.ResolvePriority(in.Priority, in.BizScene, s.highBizScenes)
 
-	if err := s.checkQuotaAdmission(ctx, in, chList, prio); err != nil {
-		return nil, err
+	if !in.AsDraft {
+		if err := s.checkQuotaAdmission(ctx, in, chList, prio); err != nil {
+			return nil, err
+		}
 	}
 
 	extra, _ := json.Marshal(in.AudienceExtra)
 	payload, _ := json.Marshal(in.Payload)
 	chsJSON, _ := json.Marshal(chList)
 	windowsJSON, _ := json.Marshal(in.SendWindows)
+
+	status := domain.TaskStatusPending
+	if in.AsDraft {
+		status = domain.TaskStatusDraft
+	}
 
 	task := &domain.MainTask{
 		BizID:           in.BizID,
@@ -244,7 +267,8 @@ func (s *Service) Create(ctx context.Context, in domain.CreateCampaignInput) (*C
 		WebhookURL:      in.WebhookURL,
 		SendWindowsJSON: string(windowsJSON),
 		PaceQPS:         in.PaceQPS,
-		Status:          domain.TaskStatusPending,
+		CreatedBy:       in.CreatedBy,
+		Status:          status,
 		ScheduledAt:     in.ScheduledAt,
 	}
 	if err := s.tasks.CreateMainTask(ctx, task); err != nil {
@@ -407,6 +431,8 @@ func (s *Service) List(ctx context.Context, q domain.ListCampaignQuery) (*Campai
 			Priority:     t.Priority.Normalize(),
 			TemplateID:   t.TemplateID,
 			Status:       t.Status,
+			CreatedBy:    t.CreatedBy,
+			CopiedFromID: t.CopiedFromID,
 			TotalCount:   t.TotalCount,
 			SuccessCount: t.SuccessCount,
 			FailCount:    t.FailCount,

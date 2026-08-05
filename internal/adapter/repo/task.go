@@ -111,6 +111,7 @@ INNER JOIN (
 		&domain.PushRecord{},
 		&domain.PushReceipt{},
 		&domain.Template{},
+		&domain.ExportJob{},
 	)
 }
 
@@ -261,6 +262,27 @@ func (r *TaskRepo) ListMainTasks(ctx context.Context, q domain.ListCampaignQuery
 	}
 	if q.Status != "" {
 		db = db.Where("status = ?", q.Status)
+	}
+	if q.Channel != "" {
+		db = db.Where("channel = ? OR JSON_CONTAINS(channels, JSON_QUOTE(?))", q.Channel, string(q.Channel))
+	}
+	if q.Priority != "" {
+		db = db.Where("priority = ?", q.Priority)
+	}
+	if q.CreatedBy != "" {
+		db = db.Where("created_by = ?", q.CreatedBy)
+	}
+	if q.CreatedFrom != nil {
+		db = db.Where("created_at >= ?", *q.CreatedFrom)
+	}
+	if q.CreatedTo != nil {
+		db = db.Where("created_at <= ?", *q.CreatedTo)
+	}
+	if q.ScheduledFrom != nil {
+		db = db.Where("scheduled_at >= ?", *q.ScheduledFrom)
+	}
+	if q.ScheduledTo != nil {
+		db = db.Where("scheduled_at <= ?", *q.ScheduledTo)
 	}
 	if kw := strings.TrimSpace(q.Keyword); kw != "" {
 		like := "%" + kw + "%"
@@ -800,11 +822,12 @@ func (r *PushRepo) ListFailedUserIDs(ctx context.Context, mainTaskID uint64) ([]
 	err := r.db.WithContext(ctx).Raw(`
 SELECT DISTINCT f.user_id
 FROM push_records f
-WHERE f.main_task_id = ? AND f.status = ?
+WHERE f.main_task_id = ? AND f.status = ? AND f.is_test = 0
   AND NOT EXISTS (
     SELECT 1 FROM push_records s
     WHERE s.main_task_id = f.main_task_id
       AND s.user_id = f.user_id
+      AND s.is_test = 0
       AND s.status IN (?, ?, ?)
   )
 `, mainTaskID, domain.PushStatusFailed,
@@ -817,7 +840,7 @@ func (r *PushRepo) CountUserOutcomes(ctx context.Context, mainTaskID uint64) (po
 	var out port.UserPushOutcomes
 	var n int64
 	if err := r.db.WithContext(ctx).Model(&domain.PushRecord{}).
-		Where("main_task_id = ?", mainTaskID).
+		Where("main_task_id = ? AND is_test = 0", mainTaskID).
 		Count(&n).Error; err != nil {
 		return out, err
 	}
@@ -827,7 +850,7 @@ func (r *PushRepo) CountUserOutcomes(ctx context.Context, mainTaskID uint64) (po
 	}
 	if err := r.db.WithContext(ctx).Raw(`
 SELECT COUNT(DISTINCT user_id) FROM push_records
-WHERE main_task_id = ? AND status IN (?, ?, ?)
+WHERE main_task_id = ? AND is_test = 0 AND status IN (?, ?, ?)
 `, mainTaskID, domain.PushStatusSent, domain.PushStatusDelivered, domain.PushStatusClicked).
 		Scan(&out.SuccessUsers).Error; err != nil {
 		return out, err
@@ -842,10 +865,10 @@ WHERE main_task_id = ? AND status IN (?, ?, ?)
 		var n int64
 		err := r.db.WithContext(ctx).Raw(`
 SELECT COUNT(DISTINCT u.user_id) FROM push_records u
-WHERE u.main_task_id = ? AND u.status = ?
+WHERE u.main_task_id = ? AND u.status = ? AND u.is_test = 0
   AND NOT EXISTS (
     SELECT 1 FROM push_records s
-    WHERE s.main_task_id = u.main_task_id AND s.user_id = u.user_id
+    WHERE s.main_task_id = u.main_task_id AND s.user_id = u.user_id AND s.is_test = 0
       AND s.status IN (?, ?, ?, ?)
   )
 `, mainTaskID, status,
@@ -955,4 +978,150 @@ func isDuplicateKey(err error) bool {
 		return mysqlErr.Number == 1062
 	}
 	return false
+}
+
+// UpdateMainTaskFields 按字段局部更新主任务（草稿编辑 / 发布）
+func (r *TaskRepo) UpdateMainTaskFields(ctx context.Context, id uint64, fields map[string]any) error {
+	if len(fields) == 0 {
+		return nil
+	}
+	return r.db.WithContext(ctx).Model(&domain.MainTask{}).Where("id = ?", id).Updates(fields).Error
+}
+
+func (r *PushRepo) ListPushRecords(ctx context.Context, mainTaskID uint64, q domain.ListPushRecordQuery) ([]domain.PushRecord, int64, error) {
+	page, size := q.Page, q.PageSize
+	if page <= 0 {
+		page = 1
+	}
+	if size <= 0 {
+		size = 20
+	}
+	if size > 200 {
+		size = 200
+	}
+	db := r.db.WithContext(ctx).Model(&domain.PushRecord{}).
+		Where("main_task_id = ? AND is_test = 0", mainTaskID)
+	if q.UserID != "" {
+		db = db.Where("user_id = ?", q.UserID)
+	}
+	if q.Channel != "" {
+		db = db.Where("channel = ?", q.Channel)
+	}
+	if q.Status != "" {
+		db = db.Where("status = ?", q.Status)
+	}
+	if kw := strings.TrimSpace(q.Keyword); kw != "" {
+		like := "%" + kw + "%"
+		db = db.Where("error_msg LIKE ? OR provider_id LIKE ? OR provider LIKE ?", like, like, like)
+	}
+	var total int64
+	if err := db.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var list []domain.PushRecord
+	err := db.Order("id DESC").Offset((page - 1) * size).Limit(size).Find(&list).Error
+	return list, total, err
+}
+
+func (r *PushRepo) AggregateFailures(ctx context.Context, mainTaskID uint64) ([]port.FailureAggRow, error) {
+	var rows []port.FailureAggRow
+	err := r.db.WithContext(ctx).Raw(`
+SELECT channel, IFNULL(provider,'') AS provider,
+       LEFT(IFNULL(error_msg,''), 200) AS error_msg,
+       COUNT(*) AS count
+FROM push_records
+WHERE main_task_id = ? AND is_test = 0 AND status = ?
+GROUP BY channel, IFNULL(provider,''), LEFT(IFNULL(error_msg,''), 200)
+ORDER BY count DESC
+LIMIT 200
+`, mainTaskID, domain.PushStatusFailed).Scan(&rows).Error
+	return rows, err
+}
+
+func (r *PushRepo) CountStatusFunnel(ctx context.Context, mainTaskID uint64) (port.FunnelCounts, error) {
+	var out port.FunnelCounts
+	type row struct {
+		Status domain.PushStatus
+		N      int64
+	}
+	var rows []row
+	err := r.db.WithContext(ctx).Raw(`
+SELECT status, COUNT(*) AS n FROM push_records
+WHERE main_task_id = ? AND is_test = 0
+GROUP BY status
+`, mainTaskID).Scan(&rows).Error
+	if err != nil {
+		return out, err
+	}
+	for _, x := range rows {
+		switch x.Status {
+		case domain.PushStatusQueued:
+			out.Queued = x.N
+		case domain.PushStatusSending:
+			out.Sending = x.N
+		case domain.PushStatusSent:
+			out.Sent = x.N
+		case domain.PushStatusDelivered:
+			out.Delivered = x.N
+		case domain.PushStatusClicked:
+			out.Clicked = x.N
+		case domain.PushStatusFailed:
+			out.Failed = x.N
+		case domain.PushStatusSuppressed:
+			out.Suppressed = x.N
+		case domain.PushStatusUnreachable:
+			out.Unreachable = x.N
+		case domain.PushStatusCancelled:
+			out.Cancelled = x.N
+		case domain.PushStatusExpired:
+			out.Expired = x.N
+		case domain.PushStatusQuotaRejected:
+			out.QuotaRejected = x.N
+		}
+	}
+	return out, nil
+}
+
+func (r *PushRepo) CreateTestRecord(ctx context.Context, rec *domain.PushRecord) error {
+	rec.IsTest = true
+	return r.db.WithContext(ctx).Create(rec).Error
+}
+
+func (r *PushRepo) CreateExportJob(ctx context.Context, job *domain.ExportJob) error {
+	return r.db.WithContext(ctx).Create(job).Error
+}
+
+func (r *PushRepo) GetExportJob(ctx context.Context, id uint64) (*domain.ExportJob, error) {
+	var job domain.ExportJob
+	if err := r.db.WithContext(ctx).First(&job, id).Error; err != nil {
+		return nil, err
+	}
+	return &job, nil
+}
+
+func (r *PushRepo) UpdateExportJob(ctx context.Context, id uint64, fields map[string]any) error {
+	return r.db.WithContext(ctx).Model(&domain.ExportJob{}).Where("id = ?", id).Updates(fields).Error
+}
+
+func (r *PushRepo) IterPushRecords(ctx context.Context, mainTaskID uint64, fn func(domain.PushRecord) error) error {
+	const batch = 500
+	var lastID uint64
+	for {
+		var list []domain.PushRecord
+		err := r.db.WithContext(ctx).
+			Where("main_task_id = ? AND is_test = 0 AND id > ?", mainTaskID, lastID).
+			Order("id ASC").Limit(batch).Find(&list).Error
+		if err != nil {
+			return err
+		}
+		if len(list) == 0 {
+			return nil
+		}
+		for _, rec := range list {
+			lastID = rec.ID
+			if err := fn(rec); err != nil {
+				return err
+			}
+		}
+	}
 }

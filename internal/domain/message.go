@@ -133,6 +133,10 @@ type CreateCampaignInput struct {
 	QuotaPolicy string `json:"quota_policy,omitempty"`
 	// ExpectedFinishMinutes 期望完成时长（分钟），用于创建准入估算；0 则用渠道配置默认
 	ExpectedFinishMinutes int `json:"expected_finish_minutes,omitempty"`
+	// CreatedBy 业务负责人
+	CreatedBy string `json:"created_by,omitempty"`
+	// AsDraft=true 时创建为 draft，不会被 Scheduler 拆分；需 Publish
+	AsDraft bool `json:"as_draft,omitempty"`
 }
 
 // SendWindow 日内投放时间窗（本地时区，HH:MM）
@@ -229,11 +233,65 @@ type SubTaskStatusSummary struct {
 
 // ListCampaignQuery 活动列表筛选
 type ListCampaignQuery struct {
-	BizScene string     `form:"biz_scene"`
-	Status   TaskStatus `form:"status"`
-	Keyword  string     `form:"keyword"` // 匹配 biz_id / title
-	Page     int        `form:"page"`
-	PageSize int        `form:"page_size"`
+	BizScene      string      `form:"biz_scene"`
+	Status        TaskStatus  `form:"status"`
+	Channel       ChannelType `form:"channel"`
+	Priority      Priority    `form:"priority"`
+	CreatedBy     string      `form:"created_by"`
+	Keyword       string      `form:"keyword"` // 匹配 biz_id / title
+	CreatedFrom   *time.Time  `form:"created_from" time_format:"2006-01-02T15:04:05Z07:00"`
+	CreatedTo     *time.Time  `form:"created_to" time_format:"2006-01-02T15:04:05Z07:00"`
+	ScheduledFrom *time.Time  `form:"scheduled_from" time_format:"2006-01-02T15:04:05Z07:00"`
+	ScheduledTo   *time.Time  `form:"scheduled_to" time_format:"2006-01-02T15:04:05Z07:00"`
+	Page          int         `form:"page"`
+	PageSize      int         `form:"page_size"`
+}
+
+// ListPushRecordQuery 用户级流水查询
+type ListPushRecordQuery struct {
+	UserID   string      `form:"user_id"`
+	Channel  ChannelType `form:"channel"`
+	Status   PushStatus  `form:"status"`
+	Keyword  string      `form:"keyword"` // error_msg / provider_id
+	Page     int         `form:"page"`
+	PageSize int         `form:"page_size"`
+}
+
+// AudienceEstimateInput 人群试算 / 预检共用入参
+type AudienceEstimateInput struct {
+	BizScene      string         `json:"biz_scene" binding:"required"`
+	AudienceRef   string         `json:"audience_ref" binding:"required"`
+	AudienceExtra map[string]any `json:"audience_extra,omitempty"`
+	Channels      []ChannelType  `json:"channels,omitempty"`
+	Channel       ChannelType    `json:"channel,omitempty"`
+	MaxPages      int            `json:"max_pages,omitempty"`    // 试算最多翻页，默认 5
+	SampleLimit   int            `json:"sample_limit,omitempty"` // 返回样本数，默认 20，最大 100
+}
+
+// DryRunInput 测试渲染 / dry-run
+type DryRunInput struct {
+	TemplateID  string            `json:"template_id" binding:"required"`
+	Title       string            `json:"title,omitempty"`
+	Vars        map[string]string `json:"vars,omitempty"`
+	Channel     ChannelType       `json:"channel,omitempty"`
+	Channels    []ChannelType     `json:"channels,omitempty"`
+	ChannelMode ChannelMode       `json:"channel_mode,omitempty"`
+	UserID      string            `json:"user_id,omitempty"`
+	// Send=true 时真实调用渠道（写入 is_test 流水，不计入活动统计）；默认仅渲染校验
+	Send bool `json:"send,omitempty"`
+}
+
+// BatchActionInput 批量操作
+type BatchActionInput struct {
+	IDs []uint64 `json:"ids" binding:"required"`
+}
+
+// CopyCampaignInput 复制活动
+type CopyCampaignInput struct {
+	BizID     string `json:"biz_id" binding:"required"`
+	Title     string `json:"title,omitempty"`
+	CreatedBy string `json:"created_by,omitempty"`
+	AsDraft   *bool  `json:"as_draft,omitempty"` // 默认 true
 }
 
 // ListSubTaskQuery 某主任务下的子任务列表

@@ -4,6 +4,7 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { Layout } from './components/Layout'
 import { CampaignsPage } from './pages/CampaignsPage'
 import { HomePage } from './pages/HomePage'
+import { OpsPage } from './pages/OpsPage'
 import { SubTasksPage } from './pages/SubTasksPage'
 import { TasksPage } from './pages/TasksPage'
 import { TemplatesPage } from './pages/TemplatesPage'
@@ -17,6 +18,8 @@ createRoot(document.getElementById('root')!).render(
           <Route index element={<HomePage />} />
           <Route path="tasks" element={<TasksPage />} />
           <Route path="tasks/:id/subtasks" element={<SubTasksPage />} />
+          <Route path="ops" element={<OpsPage />} />
+          <Route path="ops/:id" element={<OpsPage />} />
           <Route path="templates" element={<TemplatesPage />} />
           <Route path="campaigns" element={<CampaignsPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />

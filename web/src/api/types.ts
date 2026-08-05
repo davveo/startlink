@@ -21,6 +21,7 @@ export type TemplateStatus =
   | 'disabled'
 
 export type TaskStatus =
+  | 'draft'
   | 'pending'
   | 'running'
   | 'paused'
@@ -113,6 +114,8 @@ export type CreateCampaignInput = {
   webhook_url?: string
   scheduled_at?: string
   pace_qps?: number
+  created_by?: string
+  as_draft?: boolean
 }
 
 export type CreateCampaignResult = {
@@ -132,6 +135,8 @@ export type CampaignListItem = {
   priority: Priority
   template_id: string
   status: TaskStatus
+  created_by?: string
+  copied_from_id?: number
   total_count: number
   success_count: number
   fail_count: number
@@ -178,4 +183,110 @@ export type SubTaskListResult = {
   page: number
   page_size: number
   items: SubTaskView[]
+}
+
+export type BatchResult = {
+  action: string
+  total: number
+  success: number
+  failed: number
+  items: { id: number; ok: boolean; message?: string }[]
+}
+
+export type AudienceEstimateResult = {
+  raw_count: number
+  after_filter: number
+  after_ab: number
+  reachable_count: number
+  skipped_no_channel: number
+  pages_scanned: number
+  has_more: boolean
+  total_hint?: number
+  sample?: { user_id: string; channels?: ChannelType[] }[]
+  ab_percent?: number
+}
+
+export type PreflightResult = {
+  estimate: AudienceEstimateResult
+  priority: Priority
+  channels: ChannelType[]
+  channel_mode: ChannelMode
+  template_ok: boolean
+  template_code?: string
+  estimated_seconds?: number
+  capacity_risk?: string[]
+  cost_hint?: string
+  warnings?: string[]
+}
+
+export type DryRunResult = {
+  rendered_title?: string
+  rendered_content: string
+  missing_vars?: string[]
+  channels?: ChannelType[]
+  channel_mode?: ChannelMode
+  sent: boolean
+  send_results?: { success: boolean; error_msg?: string; provider_id?: string }[]
+  test_record_ids?: number[]
+}
+
+export type FunnelView = {
+  task_id: number
+  audience_raw_count: number
+  audience_filtered_count: number
+  audience_reachable_count: number
+  enqueued_users: number
+  pipeline: {
+    queued: number
+    sending: number
+    sent: number
+    delivered: number
+    clicked: number
+    failed: number
+    suppressed: number
+    unreachable: number
+    cancelled: number
+    expired: number
+    quota_rejected: number
+  }
+  user_outcomes: {
+    SuccessUsers?: number
+    success_users?: number
+    FailUsers?: number
+    fail_users?: number
+    HasRecords?: boolean
+    has_records?: boolean
+  }
+}
+
+export type FailureAgg = {
+  channel: ChannelType
+  provider: string
+  error_msg: string
+  count: number
+}
+
+export type PushRecord = {
+  id: number
+  main_task_id: number
+  user_id: string
+  channel: ChannelType
+  status: string
+  provider?: string
+  provider_id?: string
+  error_msg?: string
+  is_test?: boolean
+  sent_at?: string
+  created_at: string
+}
+
+export type ExportJob = {
+  id: number
+  main_task_id: number
+  kind: string
+  status: string
+  file_url?: string
+  row_count: number
+  error_msg?: string
+  created_at: string
 }

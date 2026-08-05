@@ -24,6 +24,9 @@ export function Layout() {
           <NavLink to="/tasks" className={navClass}>
             任务
           </NavLink>
+          <NavLink to="/ops" className={navClass}>
+            分析
+          </NavLink>
           <NavLink to="/templates" className={navClass}>
             模板
           </NavLink>

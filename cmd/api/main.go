@@ -39,6 +39,9 @@ func main() {
 		BatchSize:      infra.Cfg.Scheduler.BatchSize,
 		HighBizScenes:  infra.Cfg.MQ.HighBizScenes,
 		DefaultChannel: domain.ChannelType(infra.Cfg.Campaign.DefaultChannel),
+		Audience:       infra.Audience,
+		Channels:       infra.Channels,
+		ExportDir:      "data/exports",
 	})
 	callbackSvc := callback.NewService(infra.Push, infra.Tasks)
 	templateSvc := apptpl.NewService(infra.Templates)

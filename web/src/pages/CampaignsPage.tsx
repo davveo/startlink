@@ -44,7 +44,12 @@ export function CampaignsPage() {
     channel_mode: 'single' as ChannelMode,
     priority: 'normal' as Priority,
     pace_qps: '',
+    created_by: 'console',
+    as_draft: false,
   })
+  const [preflightText, setPreflightText] = useState('')
+  const [dryRunText, setDryRunText] = useState('')
+  const [estimateText, setEstimateText] = useState('')
 
   useEffect(() => {
     void (async () => {
@@ -139,10 +144,14 @@ export function CampaignsPage() {
           total: Number(form.audience_total) || 20,
         },
         pace_qps: form.pace_qps ? Number(form.pace_qps) : undefined,
+        created_by: form.created_by || undefined,
+        as_draft: form.as_draft,
       })
-      setMsg(`活动已创建 task_id=${res.task_id}`)
+      setMsg(`活动已创建 task_id=${res.task_id} status=${res.status}`)
       setLookup(String(res.task_id))
-      await refreshProgress(res.task_id)
+      if (res.status !== 'draft') {
+        await refreshProgress(res.task_id)
+      }
       setForm((f) => ({ ...f, biz_id: `camp-${Date.now()}` }))
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : '创建失败')
@@ -290,8 +299,156 @@ export function CampaignsPage() {
                 onChange={(e) => setForm({ ...form, pace_qps: e.target.value })}
               />
             </Field>
+            <Field label="created_by">
+              <Input
+                value={form.created_by}
+                onChange={(e) => setForm({ ...form, created_by: e.target.value })}
+              />
+            </Field>
+            <label className="mb-3 flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={form.as_draft}
+                onChange={(e) => setForm({ ...form, as_draft: e.target.checked })}
+              />
+              保存为草稿（不进入调度）
+            </label>
+            <BtnRow className="mb-3">
+              <Button
+                variant="ghost"
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  void (async () => {
+                    setBusy(true)
+                    setErr('')
+                    try {
+                      const multi = form.channelsText
+                        .split(',')
+                        .map((s) => s.trim())
+                        .filter(Boolean) as ChannelType[]
+                      const est = await api.estimateAudience({
+                        biz_scene: form.biz_scene,
+                        audience_ref: form.audience_ref,
+                        channel: multi.length ? undefined : form.channel,
+                        channels: multi.length ? multi : undefined,
+                        audience_extra: { total: Number(form.audience_total) || 20 },
+                        sample_limit: 10,
+                      })
+                      setEstimateText(JSON.stringify(est, null, 2))
+                      setMsg('人群试算完成')
+                    } catch (e) {
+                      setErr(e instanceof ApiError ? e.message : '试算失败')
+                    } finally {
+                      setBusy(false)
+                    }
+                  })()
+                }}
+              >
+                人群试算
+              </Button>
+              <Button
+                variant="ghost"
+                type="button"
+                disabled={busy || !form.template_id}
+                onClick={() => {
+                  void (async () => {
+                    setBusy(true)
+                    setErr('')
+                    try {
+                      const multi = form.channelsText
+                        .split(',')
+                        .map((s) => s.trim())
+                        .filter(Boolean) as ChannelType[]
+                      const pf = await api.preflight({
+                        biz_id: form.biz_id,
+                        biz_scene: form.biz_scene,
+                        title: form.title,
+                        template_id: form.template_id,
+                        audience_ref: form.audience_ref,
+                        channel: multi.length ? undefined : form.channel,
+                        channels: multi.length ? multi : undefined,
+                        audience_extra: { total: Number(form.audience_total) || 20 },
+                      })
+                      setPreflightText(JSON.stringify(pf, null, 2))
+                      setMsg('预检完成')
+                    } catch (e) {
+                      setErr(e instanceof ApiError ? e.message : '预检失败')
+                    } finally {
+                      setBusy(false)
+                    }
+                  })()
+                }}
+              >
+                预检
+              </Button>
+              <Button
+                variant="ghost"
+                type="button"
+                disabled={busy || !form.template_id}
+                onClick={() => {
+                  void (async () => {
+                    setBusy(true)
+                    try {
+                      const dr = await api.dryRun({
+                        template_id: form.template_id,
+                        title: form.title,
+                        channel: form.channel,
+                        vars: { name: 'Starlink' },
+                        send: false,
+                      })
+                      setDryRunText(JSON.stringify(dr, null, 2))
+                      setMsg('Dry-run 完成')
+                    } catch (e) {
+                      setErr(e instanceof ApiError ? e.message : 'dry-run 失败')
+                    } finally {
+                      setBusy(false)
+                    }
+                  })()
+                }}
+              >
+                Dry-run 渲染
+              </Button>
+              <Button
+                variant="ghost"
+                type="button"
+                disabled={busy || !form.template_id}
+                onClick={() => {
+                  void (async () => {
+                    setBusy(true)
+                    try {
+                      const dr = await api.dryRun({
+                        template_id: form.template_id,
+                        title: form.title,
+                        channel: form.channel,
+                        user_id: 'test_user_console',
+                        vars: { name: 'Starlink' },
+                        send: true,
+                      })
+                      setDryRunText(JSON.stringify(dr, null, 2))
+                      setMsg(dr.sent ? '测试发送已发出（is_test）' : '测试发送未成功')
+                    } catch (e) {
+                      setErr(e instanceof ApiError ? e.message : '测试发送失败')
+                    } finally {
+                      setBusy(false)
+                    }
+                  })()
+                }}
+              >
+                测试发送
+              </Button>
+            </BtnRow>
+            {estimateText ? (
+              <pre className="mb-3 max-h-40 overflow-auto rounded-lg bg-paper-deep p-3 text-xs">{estimateText}</pre>
+            ) : null}
+            {preflightText ? (
+              <pre className="mb-3 max-h-40 overflow-auto rounded-lg bg-paper-deep p-3 text-xs">{preflightText}</pre>
+            ) : null}
+            {dryRunText ? (
+              <pre className="mb-3 max-h-40 overflow-auto rounded-lg bg-paper-deep p-3 text-xs">{dryRunText}</pre>
+            ) : null}
             <Button variant="primary" type="submit" disabled={busy || !form.template_id}>
-              创建并开始拆分
+              {form.as_draft ? '保存草稿' : '创建并开始拆分'}
             </Button>
           </form>
         </Panel>

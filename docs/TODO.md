@@ -103,16 +103,24 @@
 ## 待办 · API 与运营能力
 
 - [x] 活动列表与筛选：分页列表，支持按场景、状态、渠道、优先级、创建时间、计划时间和负责人筛选
-  - 已落地：`GET /api/v1/campaigns`（biz_scene/status/keyword/page）；前端「任务列表」页
-  - 子任务：`GET /api/v1/campaigns/:id/subtasks`；前端「子任务」页
-- [ ] 批量操作：批量暂停、恢复、取消、重推和结果导出
-- [ ] 活动预检（preflight）：创建前返回预计人群量、过滤量、渠道可达量、预计耗时、容量风险和费用估算
-- [ ] 人群试算接口：只统计人群或解析少量样本，不创建主任务、不发送消息
-- [ ] 测试发送与 dry-run：完成模板渲染和渠道配置校验，但不进入正式统计
-- [ ] 活动草稿与复制：支持草稿、复制、开始前编辑和重新排期
-- [ ] 投递漏斗：原始人群 → AB 抽样 → 黑名单/退订 → 不可达 → 入队 → 发送 → 送达 → 点击
-- [ ] 失败分析：按渠道、供应商错误码、是否可重试和时间段汇总
-- [ ] 结果明细与异步导出：提供用户级流水查询，大结果集导出到对象存储
+  - `GET /api/v1/campaigns`（biz_scene/status/channel/priority/created_by/keyword/created_*/scheduled_*/page）
+  - 前端「任务」页；子任务：`GET /api/v1/campaigns/:id/subtasks`
+- [x] 批量操作：批量暂停、恢复、取消、重推和结果导出
+  - `POST /api/v1/campaigns/batch/:action`（pause/resume/cancel/retry）；前端多选批量；同步/异步 CSV 导出见下
+- [x] 活动预检（preflight）：创建前返回预计人群量、过滤量、渠道可达量、预计耗时、容量风险和费用估算
+  - `POST /api/v1/campaigns/preflight`；前端「活动」页预检按钮
+- [x] 人群试算接口：只统计人群或解析少量样本，不创建主任务、不发送消息
+  - `POST /api/v1/audiences/estimate`；前端「人群试算」
+- [x] 测试发送与 dry-run：完成模板渲染和渠道配置校验，但不进入正式统计
+  - `POST /api/v1/campaigns/dry-run`（`send=false` 仅渲染；`send=true` 写入 `is_test` 流水）
+- [x] 活动草稿与复制：支持草稿、复制、开始前编辑和重新排期
+  - 状态 `draft`；创建 `as_draft`；`PUT /campaigns/:id`、`POST .../publish`、`POST .../copy`
+- [x] 投递漏斗：原始人群 → AB 抽样 → 黑名单/退订 → 不可达 → 入队 → 发送 → 送达 → 点击
+  - `GET /api/v1/campaigns/:id/funnel`；前端「分析」页
+- [x] 失败分析：按渠道、供应商错误码、是否可重试和时间段汇总
+  - `GET /api/v1/campaigns/:id/failures`（按 channel/provider/error_msg 聚合计数；时间窗/可重试标签可后续增强）
+- [x] 结果明细与异步导出：提供用户级流水查询，大结果集导出到对象存储
+  - `GET .../records`；同步 `GET .../export`；异步 `POST .../exports` + `GET /exports/:id[/download]`（当前落本地 `data/exports`，可换对象存储）
 - [ ] DLQ / PEL 运维 API：查询、查看错误、单条/批量重投和丢弃；人工操作写审计日志（替代纯 redis-cli）
 
 ---

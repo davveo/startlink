@@ -6,6 +6,9 @@ import (
 
 var varPattern = regexp.MustCompile(`\{\{\s*([a-zA-Z0-9_]+)\s*\}\}`)
 
+// VarPattern 暴露模板变量正则，供预览/校验复用
+func VarPattern() *regexp.Regexp { return varPattern }
+
 // RenderTemplate 渲染个性化变量 {{name}}
 func RenderTemplate(body string, vars map[string]string) string {
 	if len(vars) == 0 {

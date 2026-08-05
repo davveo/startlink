@@ -127,7 +127,7 @@ open http://localhost:3000
 
 | 服务 | 地址/端口 | 默认凭据 |
 | --- | --- | --- |
-| Web 运营台 | `http://localhost:3000` | 无认证 |
+| Web 运营台 | `http://localhost:3000` | 无认证；任务/分析/模板/活动 |
 | API | `http://localhost:8080` | 无认证 |
 | MySQL | `localhost:3306/starlink` | `root` / `root` |
 | Redis | `localhost:6379` | 无密码 |
@@ -428,15 +428,32 @@ curl http://localhost:8080/api/v1/campaigns/biz/campaign-001
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| `POST` | `/api/v1/campaigns` | 创建活动；`biz_id` 幂等 |
+| `POST` | `/api/v1/campaigns` | 创建活动；`biz_id` 幂等；`as_draft=true` 存草稿 |
+| `GET` | `/api/v1/campaigns` | 活动列表；筛选见下 |
 | `GET` | `/api/v1/campaigns/:id` | 查询活动进度（与 `/progress` 返回相同结构） |
 | `GET` | `/api/v1/campaigns/:id/progress` | 查询活动进度 |
 | `GET` | `/api/v1/campaigns/biz/:biz_id` | 按业务 ID 查询进度 |
+| `PUT` | `/api/v1/campaigns/:id` | 更新草稿（标题/排期/人群/模板等） |
+| `POST` | `/api/v1/campaigns/:id/publish` | 草稿 → `pending` 进入调度 |
+| `POST` | `/api/v1/campaigns/:id/copy` | 复制活动（可仍为草稿） |
 | `POST` | `/api/v1/campaigns/:id/cancel` | 取消非终态任务；终态返回 `already_terminal` |
 | `POST` | `/api/v1/campaigns/:id/pause` | 暂停 `pending/running/retrying` 任务 |
 | `POST` | `/api/v1/campaigns/:id/resume` | 恢复暂停任务；有子任务→`running`，否则→`pending` |
 | `POST` | `/api/v1/campaigns/:id/retry` | 重推 `failed/partial`（代码也接受 `running`） |
+| `POST` | `/api/v1/campaigns/batch/:action` | 批量 pause/resume/cancel/retry；body `{ids:[...]}` |
+| `POST` | `/api/v1/campaigns/preflight` | 创建前预检（人群/模板/容量风险） |
+| `POST` | `/api/v1/campaigns/dry-run` | 模板渲染校验；`send=true` 测试发送（`is_test`） |
+| `POST` | `/api/v1/audiences/estimate` | 人群试算（不落主任务） |
+| `GET` | `/api/v1/campaigns/:id/funnel` | 投递漏斗 |
+| `GET` | `/api/v1/campaigns/:id/failures` | 失败聚合分析 |
+| `GET` | `/api/v1/campaigns/:id/records` | 用户级推送流水 |
+| `GET` | `/api/v1/campaigns/:id/export` | 同步导出 CSV（`kind=records|failures`） |
+| `POST` | `/api/v1/campaigns/:id/exports` | 异步导出任务 |
+| `GET` | `/api/v1/exports/:id` | 查询导出任务 |
+| `GET` | `/api/v1/exports/:id/download` | 下载导出文件 |
 | `GET` | `/api/v1/channels` | 列出已注册渠道 |
+
+列表筛选查询参数：`biz_scene`、`status`、`channel`、`priority`、`created_by`、`keyword`、`created_from`/`created_to`、`scheduled_from`/`scheduled_to`、`page`、`page_size`。
 
 创建活动字段：
 
@@ -459,6 +476,8 @@ curl http://localhost:8080/api/v1/campaigns/biz/campaign-001
 | `expected_finish_minutes` | 否 | 准入估算用期望完成时长；0 用渠道配置 |
 | `audience_extra.total_hint` | 否 | 人群总量提示；enforce 准入依赖此字段（无则创建不拒、拆分后告警） |
 | `template_body` | 否 | 已废弃并忽略，实际内容取已审核模板快照 |
+| `as_draft` | 否 | `true` 时状态为 `draft`，不进入调度与配额准入 |
+| `created_by` | 否 | 创建人标识，可用于列表筛选 |
 
 进度响应主要字段：
 

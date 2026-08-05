@@ -28,6 +28,14 @@ type MainTask struct {
 	Status        TaskStatus  `gorm:"size:32;not null;index;default:pending" json:"status"`
 	Version       int64       `gorm:"not null;default:0" json:"version"`
 	WebhookURL    string      `gorm:"size:512" json:"webhook_url,omitempty"`
+	// CreatedBy 业务负责人/创建人（非拆分租约）
+	CreatedBy string `gorm:"size:64;index" json:"created_by,omitempty"`
+	// CopiedFromID 复制来源主任务
+	CopiedFromID *uint64 `gorm:"index" json:"copied_from_id,omitempty"`
+	// AudienceRawCount / Filtered / Reachable：拆分或预检写入的漏斗计数（可选）
+	AudienceRawCount       int64 `gorm:"not null;default:0" json:"audience_raw_count"`
+	AudienceFilteredCount  int64 `gorm:"not null;default:0" json:"audience_filtered_count"`
+	AudienceReachableCount int64 `gorm:"not null;default:0" json:"audience_reachable_count"`
 	// SendWindowsJSON 分时投放窗 JSON，如 [{"start":"09:00","end":"21:00"}]
 	SendWindowsJSON string `gorm:"type:json;column:send_windows" json:"send_windows,omitempty"`
 	// PaceQPS 本活动入队速率上限；0 不限制
@@ -124,6 +132,7 @@ type PushRecord struct {
 	// ProviderID 渠道侧消息 ID；未发送时为 NULL，避免空串撞唯一键
 	ProviderID *string    `gorm:"size:128;uniqueIndex:uk_provider_ref" json:"provider_id,omitempty"`
 	ErrorMsg   string     `gorm:"size:512" json:"error_msg,omitempty"`
+	IsTest     bool       `gorm:"not null;default:false;index" json:"is_test"`
 	SentAt     *time.Time `json:"sent_at,omitempty"`
 	CreatedAt  time.Time  `json:"created_at"`
 	UpdatedAt  time.Time  `json:"updated_at"`
@@ -153,3 +162,31 @@ type PushReceipt struct {
 }
 
 func (PushReceipt) TableName() string { return "push_receipts" }
+
+// ExportJob 异步导出任务（本地文件，生产可换对象存储）
+type ExportJob struct {
+	ID         uint64     `gorm:"primaryKey;autoIncrement" json:"id"`
+	MainTaskID uint64     `gorm:"index;not null" json:"main_task_id"`
+	Kind       string     `gorm:"size:32;not null;index" json:"kind"`                   // records | failures
+	Status     string     `gorm:"size:32;not null;index;default:pending" json:"status"` // pending|running|success|failed
+	FilterJSON string     `gorm:"type:json" json:"filter_json,omitempty"`
+	FilePath   string     `gorm:"size:512" json:"file_path,omitempty"`
+	FileURL    string     `gorm:"size:512" json:"file_url,omitempty"`
+	RowCount   int64      `gorm:"not null;default:0" json:"row_count"`
+	ErrorMsg   string     `gorm:"size:512" json:"error_msg,omitempty"`
+	CreatedBy  string     `gorm:"size:64" json:"created_by,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
+}
+
+func (ExportJob) TableName() string { return "export_jobs" }
+
+const (
+	ExportStatusPending = "pending"
+	ExportStatusRunning = "running"
+	ExportStatusSuccess = "success"
+	ExportStatusFailed  = "failed"
+	ExportKindRecords   = "records"
+	ExportKindFailures  = "failures"
+)

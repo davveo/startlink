@@ -87,6 +87,8 @@ type TaskRepository interface {
 	ListPendingMainTasks(ctx context.Context, limit int) ([]domain.MainTask, error)
 	// ListMainTasks 分页列出主任务；keyword 模糊匹配 biz_id / title
 	ListMainTasks(ctx context.Context, q domain.ListCampaignQuery) ([]domain.MainTask, int64, error)
+	// UpdateMainTaskFields 局部更新主任务字段
+	UpdateMainTaskFields(ctx context.Context, id uint64, fields map[string]any) error
 
 	CreateSubTasks(ctx context.Context, tasks []domain.SubTask) error
 	// DeleteSubTasksByMainTask 删除主任务下全部子任务（卡单重拆前清理半成品）
@@ -117,13 +119,36 @@ type TaskRepository interface {
 
 // UserPushOutcomes 按 push_records 汇总的用户级渠道口径
 type UserPushOutcomes struct {
-	SuccessUsers       int64 // 任一渠道 sent/delivered/clicked 的去重用户数
-	FailUsers          int64 // 有供应商失败且无任何渠道成功的去重用户数
-	SuppressedUsers    int64 // 仅被抑制（频控/退订等）且无成功/失败渠道的用户
-	UnreachableUsers   int64
-	ExpiredUsers       int64
-	QuotaRejectedUsers int64
-	HasRecords         bool // 是否已有流水
+	SuccessUsers       int64 `json:"success_users"`        // 任一渠道 sent/delivered/clicked 的去重用户数
+	FailUsers          int64 `json:"fail_users"`           // 有供应商失败且无任何渠道成功的去重用户数
+	SuppressedUsers    int64 `json:"suppressed_users"`     // 仅被抑制（频控/退订等）且无成功/失败渠道的用户
+	UnreachableUsers   int64 `json:"unreachable_users"`    // 无可达渠道
+	ExpiredUsers       int64 `json:"expired_users"`        // 过期
+	QuotaRejectedUsers int64 `json:"quota_rejected_users"` // 配额拒绝
+	HasRecords         bool  `json:"has_records"`          // 是否已有流水
+}
+
+// FailureAggRow 失败分析聚合行
+type FailureAggRow struct {
+	Channel  domain.ChannelType `json:"channel"`
+	Provider string             `json:"provider"`
+	ErrorMsg string             `json:"error_msg"`
+	Count    int64              `json:"count"`
+}
+
+// FunnelCounts 流水状态漏斗计数
+type FunnelCounts struct {
+	Queued        int64 `json:"queued"`
+	Sending       int64 `json:"sending"`
+	Sent          int64 `json:"sent"`
+	Delivered     int64 `json:"delivered"`
+	Clicked       int64 `json:"clicked"`
+	Failed        int64 `json:"failed"`
+	Suppressed    int64 `json:"suppressed"`
+	Unreachable   int64 `json:"unreachable"`
+	Cancelled     int64 `json:"cancelled"`
+	Expired       int64 `json:"expired"`
+	QuotaRejected int64 `json:"quota_rejected"`
 }
 
 // PushRepository 推送流水与回执
@@ -143,6 +168,14 @@ type PushRepository interface {
 	// ClaimDelivery 按 (main_task, user, channel) 占位；duplicate=true 表示已成功投递应跳过
 	// inFlight=true 表示另一 worker 正在发送，调用方宜稍后重试
 	ClaimDelivery(ctx context.Context, rec *domain.PushRecord) (id uint64, duplicate, inFlight bool, err error)
+	ListPushRecords(ctx context.Context, mainTaskID uint64, q domain.ListPushRecordQuery) ([]domain.PushRecord, int64, error)
+	AggregateFailures(ctx context.Context, mainTaskID uint64) ([]FailureAggRow, error)
+	CountStatusFunnel(ctx context.Context, mainTaskID uint64) (FunnelCounts, error)
+	CreateTestRecord(ctx context.Context, rec *domain.PushRecord) error
+	CreateExportJob(ctx context.Context, job *domain.ExportJob) error
+	GetExportJob(ctx context.Context, id uint64) (*domain.ExportJob, error)
+	UpdateExportJob(ctx context.Context, id uint64, fields map[string]any) error
+	IterPushRecords(ctx context.Context, mainTaskID uint64, fn func(domain.PushRecord) error) error
 }
 
 // UnsubscribeChecker 发送前按 user+channel 终检退订

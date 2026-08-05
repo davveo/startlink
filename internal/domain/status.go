@@ -4,6 +4,7 @@ package domain
 type TaskStatus string
 
 const (
+	TaskStatusDraft     TaskStatus = "draft"     // 草稿：不可被 Scheduler 认领
 	TaskStatusPending   TaskStatus = "pending"   // 待执行
 	TaskStatusRunning   TaskStatus = "running"   // 执行中
 	TaskStatusPaused    TaskStatus = "paused"    // 已暂停（可恢复）

@@ -126,6 +126,9 @@ export const api = {
   listCampaigns: (q?: {
     biz_scene?: string
     status?: TaskStatus | ''
+    channel?: string
+    priority?: string
+    created_by?: string
     keyword?: string
     page?: number
     page_size?: number
@@ -133,6 +136,9 @@ export const api = {
     const params = new URLSearchParams()
     if (q?.biz_scene) params.set('biz_scene', q.biz_scene)
     if (q?.status) params.set('status', q.status)
+    if (q?.channel) params.set('channel', q.channel)
+    if (q?.priority) params.set('priority', q.priority)
+    if (q?.created_by) params.set('created_by', q.created_by)
     if (q?.keyword) params.set('keyword', q.keyword)
     params.set('page', String(q?.page ?? 1))
     params.set('page_size', String(q?.page_size ?? 20))
@@ -169,4 +175,84 @@ export const api = {
 
   retryCampaign: (id: number) =>
     request<unknown>(`/api/v1/campaigns/${id}/retry`, { method: 'POST', body: '{}' }),
+
+  batchAction: (action: 'pause' | 'resume' | 'cancel' | 'retry', ids: number[]) =>
+    request<import('./types').BatchResult>(`/api/v1/campaigns/batch/${action}`, {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
+    }),
+
+  preflight: (body: CreateCampaignInput) =>
+    request<import('./types').PreflightResult>('/api/v1/campaigns/preflight', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  estimateAudience: (body: {
+    biz_scene: string
+    audience_ref: string
+    audience_extra?: Record<string, unknown>
+    channel?: string
+    channels?: string[]
+    max_pages?: number
+    sample_limit?: number
+  }) =>
+    request<import('./types').AudienceEstimateResult>('/api/v1/audiences/estimate', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  dryRun: (body: {
+    template_id: string
+    title?: string
+    vars?: Record<string, string>
+    channel?: string
+    channels?: string[]
+    user_id?: string
+    send?: boolean
+  }) =>
+    request<import('./types').DryRunResult>('/api/v1/campaigns/dry-run', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  copyCampaign: (id: number, body: { biz_id: string; title?: string; as_draft?: boolean; created_by?: string }) =>
+    request<CreateCampaignResult>(`/api/v1/campaigns/${id}/copy`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  publishCampaign: (id: number) =>
+    request<CreateCampaignResult>(`/api/v1/campaigns/${id}/publish`, { method: 'POST', body: '{}' }),
+
+  getFunnel: (id: number) => request<import('./types').FunnelView>(`/api/v1/campaigns/${id}/funnel`),
+
+  getFailures: (id: number) =>
+    request<{ task_id: number; items: import('./types').FailureAgg[] }>(`/api/v1/campaigns/${id}/failures`),
+
+  listRecords: (
+    id: number,
+    q?: { user_id?: string; channel?: string; status?: string; keyword?: string; page?: number; page_size?: number },
+  ) => {
+    const params = new URLSearchParams()
+    if (q?.user_id) params.set('user_id', q.user_id)
+    if (q?.channel) params.set('channel', q.channel)
+    if (q?.status) params.set('status', q.status)
+    if (q?.keyword) params.set('keyword', q.keyword)
+    params.set('page', String(q?.page ?? 1))
+    params.set('page_size', String(q?.page_size ?? 20))
+    return request<{ total: number; page: number; page_size: number; items: import('./types').PushRecord[] }>(
+      `/api/v1/campaigns/${id}/records?${params}`,
+    )
+  },
+
+  createExport: (id: number, kind = 'records') =>
+    request<import('./types').ExportJob>(`/api/v1/campaigns/${id}/exports`, {
+      method: 'POST',
+      body: JSON.stringify({ kind, created_by: 'console' }),
+    }),
+
+  getExport: (jobId: number) => request<import('./types').ExportJob>(`/api/v1/exports/${jobId}`),
+
+  exportSyncUrl: (id: number, kind = 'records') => `/api/v1/campaigns/${id}/export?kind=${kind}`,
 }
