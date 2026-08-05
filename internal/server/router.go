@@ -16,14 +16,17 @@ func New(mode string, deps Deps) *gin.Engine {
 		gin.SetMode(gin.ReleaseMode)
 	}
 	r := gin.New()
-	r.Use(gin.Recovery(), gin.Logger())
+	r.Use(gin.Recovery(), gin.Logger(), corsMiddleware())
 
 	r.GET("/healthz", handler.Health)
 
 	api := r.Group("/api/v1")
 	{
 		api.POST("/campaigns", deps.Campaign.Create)
+		api.GET("/campaigns", deps.Campaign.List)
 		api.GET("/campaigns/biz/:biz_id", deps.Campaign.GetByBizID)
+		api.GET("/campaigns/:id/subtasks/:sub_id", deps.Campaign.GetSubTask)
+		api.GET("/campaigns/:id/subtasks", deps.Campaign.ListSubTasks)
 		api.GET("/campaigns/:id", deps.Campaign.Get)
 		api.GET("/campaigns/:id/progress", deps.Campaign.Progress)
 		api.POST("/campaigns/:id/cancel", deps.Campaign.Cancel)
@@ -48,4 +51,24 @@ func New(mode string, deps Deps) *gin.Engine {
 		api.POST("/templates/:id/enable", deps.Template.Enable)
 	}
 	return r
+}
+
+// corsMiddleware 便于本地 Vite 直连 API；Compose 下前端走 nginx 同源反代可不依赖 CORS。
+func corsMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		origin := c.GetHeader("Origin")
+		if origin == "" {
+			c.Next()
+			return
+		}
+		c.Header("Access-Control-Allow-Origin", origin)
+		c.Header("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS")
+		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		c.Header("Access-Control-Allow-Credentials", "true")
+		if c.Request.Method == "OPTIONS" {
+			c.AbortWithStatus(204)
+			return
+		}
+		c.Next()
+	}
 }

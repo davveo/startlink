@@ -36,6 +36,7 @@ services:
       timeout: 3s
       retries: 20
 
+  # 仅 api 负责 build；scheduler/pusher 复用同一镜像，避免并行 build 抢写 starlink:latest
   api:
     build:
       context: .
@@ -54,11 +55,14 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 15s
 
   scheduler:
-    build:
-      context: .
-      dockerfile: Dockerfile
     image: starlink:latest
     container_name: starlink-scheduler
     restart: unless-stopped
@@ -71,11 +75,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      api:
+        condition: service_healthy
 
   pusher:
-    build:
-      context: .
-      dockerfile: Dockerfile
     image: starlink:latest
     container_name: starlink-pusher
     restart: unless-stopped
@@ -88,6 +91,28 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      api:
+        condition: service_healthy
+
+  # 独立前端镜像：nginx 静态资源 + /api 反代到 api:8080
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    image: starlink-web:latest
+    container_name: starlink-web
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/web-healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
 
 volumes:
   starlink-mysql-data:

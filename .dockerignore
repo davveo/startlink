@@ -10,3 +10,5 @@ bin
 docs
 agent-transcripts
 .dockerignore
+web/node_modules
+web/dist

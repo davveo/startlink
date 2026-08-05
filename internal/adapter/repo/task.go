@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	mysqldriver "github.com/go-sql-driver/mysql"
@@ -37,8 +38,22 @@ func NewDB(dsn string, maxIdle, maxOpen int) (*gorm.DB, error) {
 }
 
 func AutoMigrate(db *gorm.DB) error {
-	// 建唯一索引前清理历史重复流水，保留同维度最新一条
-	_ = db.Exec(`
+	// 多进程（api/scheduler/pusher）并发启动时串行化 DDL，避免 Error 1050
+	const lockName = "starlink_schema_migrate"
+	var got int
+	if err := db.Raw("SELECT GET_LOCK(?, 120)", lockName).Scan(&got).Error; err != nil {
+		return fmt.Errorf("acquire migrate lock: %w", err)
+	}
+	if got != 1 {
+		return fmt.Errorf("acquire migrate lock timed out")
+	}
+	defer func() {
+		_ = db.Exec("SELECT RELEASE_LOCK(?)", lockName).Error
+	}()
+
+	if db.Migrator().HasTable(&domain.PushRecord{}) {
+		// 建唯一索引前清理历史重复流水，保留同维度最新一条
+		_ = db.Exec(`
 DELETE pr FROM push_records pr
 INNER JOIN (
   SELECT main_task_id, user_id, channel, MAX(id) AS keep_id
@@ -51,29 +66,13 @@ INNER JOIN (
    AND pr.id <> d.keep_id
 `).Error
 
-	// 先补齐 provider 列，再清洗数据，最后 AutoMigrate 建唯一索引
-	if db.Migrator().HasTable(&domain.PushRecord{}) {
 		if !db.Migrator().HasColumn(&domain.PushRecord{}, "Provider") {
 			_ = db.Migrator().AddColumn(&domain.PushRecord{}, "Provider")
 		}
-	}
+		_ = db.Exec(`UPDATE push_records SET provider_id = NULL WHERE provider_id = ''`).Error
+		_ = db.Exec(`UPDATE push_records SET provider = channel WHERE (provider IS NULL OR provider = '') AND channel IS NOT NULL AND channel <> ''`).Error
 
-	_ = db.Exec(`UPDATE push_records SET provider_id = NULL WHERE provider_id = ''`).Error
-	_ = db.Exec(`UPDATE push_records SET provider = channel WHERE (provider IS NULL OR provider = '') AND channel IS NOT NULL AND channel <> ''`).Error
-
-	_ = db.Exec(`
-DELETE pr FROM push_receipts pr
-INNER JOIN (
-  SELECT push_record_id, event, MAX(id) AS keep_id
-  FROM push_receipts
-  GROUP BY push_record_id, event
-  HAVING COUNT(*) > 1
-) d ON pr.push_record_id = d.push_record_id
-   AND pr.event = d.event
-   AND pr.id <> d.keep_id
-`).Error
-
-	_ = db.Exec(`
+		_ = db.Exec(`
 DELETE pr FROM push_records pr
 INNER JOIN (
   SELECT provider, channel, provider_id, MAX(id) AS keep_id
@@ -86,6 +85,21 @@ INNER JOIN (
    AND pr.provider_id = d.provider_id
    AND pr.id <> d.keep_id
 `).Error
+	}
+
+	if db.Migrator().HasTable(&domain.PushReceipt{}) {
+		_ = db.Exec(`
+DELETE pr FROM push_receipts pr
+INNER JOIN (
+  SELECT push_record_id, event, MAX(id) AS keep_id
+  FROM push_receipts
+  GROUP BY push_record_id, event
+  HAVING COUNT(*) > 1
+) d ON pr.push_record_id = d.push_record_id
+   AND pr.event = d.event
+   AND pr.id <> d.keep_id
+`).Error
+	}
 
 	return db.AutoMigrate(
 		&domain.MainTask{},
@@ -222,6 +236,41 @@ func (r *TaskRepo) ListPendingMainTasks(ctx context.Context, limit int) ([]domai
 		Limit(limit).
 		Find(&list).Error
 	return list, err
+}
+
+func (r *TaskRepo) ListMainTasks(ctx context.Context, q domain.ListCampaignQuery) ([]domain.MainTask, int64, error) {
+	page := q.Page
+	if page <= 0 {
+		page = 1
+	}
+	size := q.PageSize
+	if size <= 0 {
+		size = 20
+	}
+	if size > 100 {
+		size = 100
+	}
+
+	db := r.db.WithContext(ctx).Model(&domain.MainTask{})
+	if q.BizScene != "" {
+		db = db.Where("biz_scene = ?", q.BizScene)
+	}
+	if q.Status != "" {
+		db = db.Where("status = ?", q.Status)
+	}
+	if kw := strings.TrimSpace(q.Keyword); kw != "" {
+		like := "%" + kw + "%"
+		db = db.Where("biz_id LIKE ? OR title LIKE ?", like, like)
+	}
+
+	var total int64
+	if err := db.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	var list []domain.MainTask
+	err := db.Order("id DESC").Offset((page - 1) * size).Limit(size).Find(&list).Error
+	return list, total, err
 }
 
 // CancelMainTask 仅取消仍处于可执行状态的主任务
@@ -509,6 +558,49 @@ func (r *TaskRepo) ListSubTasksByStatus(ctx context.Context, mainTaskID uint64, 
 		Where("main_task_id = ? AND status = ?", mainTaskID, status).
 		Find(&list).Error
 	return list, err
+}
+
+func (r *TaskRepo) ListSubTasks(ctx context.Context, mainTaskID uint64, q domain.ListSubTaskQuery) ([]domain.SubTask, int64, error) {
+	page := q.Page
+	if page <= 0 {
+		page = 1
+	}
+	size := q.PageSize
+	if size <= 0 {
+		size = 50
+	}
+	if size > 200 {
+		size = 200
+	}
+
+	db := r.db.WithContext(ctx).Model(&domain.SubTask{}).Where("main_task_id = ?", mainTaskID)
+	if q.Status != "" {
+		db = db.Where("status = ?", q.Status)
+	}
+
+	var total int64
+	if err := db.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	var list []domain.SubTask
+	// 列表不需要巨型 user_ids JSON
+	err := db.Select("id, main_task_id, shard_index, total_count, success_count, fail_count, status, retry_count, worker_id, claimed_at, started_at, finished_at, last_error, created_at, updated_at").
+		Order("shard_index ASC, id ASC").
+		Offset((page - 1) * size).
+		Limit(size).
+		Find(&list).Error
+	return list, total, err
+}
+
+func (r *TaskRepo) GetSubTask(ctx context.Context, id uint64) (*domain.SubTask, error) {
+	var st domain.SubTask
+	if err := r.db.WithContext(ctx).
+		Select("id, main_task_id, shard_index, total_count, success_count, fail_count, status, retry_count, worker_id, claimed_at, started_at, finished_at, last_error, created_at, updated_at").
+		First(&st, id).Error; err != nil {
+		return nil, err
+	}
+	return &st, nil
 }
 
 func (r *TaskRepo) SyncMainCounters(ctx context.Context, id uint64, success, fail int64, subDone, subTotal int) error {

@@ -226,3 +226,59 @@ type SubTaskStatusSummary struct {
 	UserSuccess int64      `json:"user_success"`
 	UserFail    int64      `json:"user_fail"`
 }
+
+// ListCampaignQuery 活动列表筛选
+type ListCampaignQuery struct {
+	BizScene string     `form:"biz_scene"`
+	Status   TaskStatus `form:"status"`
+	Keyword  string     `form:"keyword"` // 匹配 biz_id / title
+	Page     int        `form:"page"`
+	PageSize int        `form:"page_size"`
+}
+
+// ListSubTaskQuery 某主任务下的子任务列表
+type ListSubTaskQuery struct {
+	Status   TaskStatus `form:"status"`
+	Page     int        `form:"page"`
+	PageSize int        `form:"page_size"`
+}
+
+// SubTaskView 子任务列表视图（不返回完整 user_ids JSON，避免大包）
+type SubTaskView struct {
+	ID           uint64     `json:"id"`
+	MainTaskID   uint64     `json:"main_task_id"`
+	ShardIndex   int        `json:"shard_index"`
+	TotalCount   int        `json:"total_count"`
+	SuccessCount int        `json:"success_count"`
+	FailCount    int        `json:"fail_count"`
+	Status       TaskStatus `json:"status"`
+	RetryCount   int        `json:"retry_count"`
+	WorkerID     string     `json:"worker_id,omitempty"`
+	LastError    string     `json:"last_error,omitempty"`
+	ClaimedAt    *time.Time `json:"claimed_at,omitempty"`
+	StartedAt    *time.Time `json:"started_at,omitempty"`
+	FinishedAt   *time.Time `json:"finished_at,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+}
+
+// ToView 转为不含人群 payload 的视图
+func (s SubTask) ToView() SubTaskView {
+	return SubTaskView{
+		ID:           s.ID,
+		MainTaskID:   s.MainTaskID,
+		ShardIndex:   s.ShardIndex,
+		TotalCount:   s.TotalCount,
+		SuccessCount: s.SuccessCount,
+		FailCount:    s.FailCount,
+		Status:       s.Status,
+		RetryCount:   s.RetryCount,
+		WorkerID:     s.WorkerID,
+		LastError:    s.LastError,
+		ClaimedAt:    s.ClaimedAt,
+		StartedAt:    s.StartedAt,
+		FinishedAt:   s.FinishedAt,
+		CreatedAt:    s.CreatedAt,
+		UpdatedAt:    s.UpdatedAt,
+	}
+}

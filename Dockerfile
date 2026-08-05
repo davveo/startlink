@@ -19,11 +19,13 @@ RUN mkdir -p /out \
  && go build -ldflags="-s -w" -o /out/pusher ./cmd/pusher
 
 # ---- runtime ----
+# 后端三进程共用此镜像（APP=api|scheduler|pusher）。
+# 前端为独立镜像：见 web/Dockerfile（Compose 服务名 web，端口 3000）。
 FROM alpine:3.20
 
 WORKDIR /app
 
-RUN apk add --no-cache ca-certificates tzdata \
+RUN apk add --no-cache ca-certificates tzdata wget \
  && adduser -D -H -u 10001 starlink
 
 COPY --from=builder /out/api /app/api

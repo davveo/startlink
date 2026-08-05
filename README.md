@@ -118,18 +118,20 @@ api ───────────────► MySQL
 ```bash
 docker compose up -d --build
 curl http://localhost:8080/healthz
-docker compose logs -f api scheduler pusher
+open http://localhost:3000
+docker compose logs -f api scheduler pusher web
 ```
 
 默认会启动：
 
 | 服务 | 地址/端口 | 默认凭据 |
 | --- | --- | --- |
+| Web 运营台 | `http://localhost:3000` | 无认证 |
 | API | `http://localhost:8080` | 无认证 |
 | MySQL | `localhost:3306/starlink` | `root` / `root` |
 | Redis | `localhost:6379` | 无密码 |
 
-注意：`api` / `scheduler` / `pusher` 均声明 `build` 并共用 `image: starlink:latest`，可单独 `docker compose up scheduler`（Compose 会按需构建）。
+注意：仅 `api` 服务声明后端 `build` 并产出 `starlink:latest`；`scheduler` / `pusher` 复用该镜像，并等待 `api` healthy 后再启动。前端为独立镜像 `starlink-web:latest`（`web/Dockerfile`），nginx 将 `/api` 反代到 `api:8080`。若只想重建后端：`docker compose build api`；只重建前端：`docker compose build web`。
 
 停止服务：
 
@@ -1255,6 +1257,7 @@ go test ./...
 ```text
 cmd/                    三个可执行程序（api / scheduler / pusher）
 configs/                本地与 Docker 配置
+web/                    前端运营台（Vite + React；独立 Dockerfile，Compose 端口 3000）
 internal/app/           活动、模板、回执应用服务
 internal/domain/        领域模型、状态机与 API 输入
 internal/port/          可替换接口（SPI 与仓储）

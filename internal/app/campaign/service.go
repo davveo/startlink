@@ -66,6 +66,47 @@ type CreateResult struct {
 	Status domain.TaskStatus `json:"status"`
 }
 
+type CampaignListItem struct {
+	ID           uint64              `json:"id"`
+	BizID        string              `json:"biz_id"`
+	BizScene     string              `json:"biz_scene"`
+	Title        string              `json:"title"`
+	Channel      domain.ChannelType  `json:"channel"`
+	Channels     []domain.ChannelType `json:"channels,omitempty"`
+	ChannelMode  domain.ChannelMode  `json:"channel_mode"`
+	Priority     domain.Priority     `json:"priority"`
+	TemplateID   string              `json:"template_id"`
+	Status       domain.TaskStatus   `json:"status"`
+	TotalCount   int64               `json:"total_count"`
+	SuccessCount int64               `json:"success_count"`
+	FailCount    int64               `json:"fail_count"`
+	SubTaskTotal int                 `json:"sub_task_total"`
+	SubTaskDone  int                 `json:"sub_task_done"`
+	ScheduledAt  *time.Time          `json:"scheduled_at,omitempty"`
+	StartedAt    *time.Time          `json:"started_at,omitempty"`
+	FinishedAt   *time.Time          `json:"finished_at,omitempty"`
+	CreatedAt    time.Time           `json:"created_at"`
+	UpdatedAt    time.Time           `json:"updated_at"`
+}
+
+type CampaignListResult struct {
+	Total    int64              `json:"total"`
+	Page     int                `json:"page"`
+	PageSize int                `json:"page_size"`
+	Items    []CampaignListItem `json:"items"`
+}
+
+type SubTaskListResult struct {
+	MainTaskID uint64               `json:"main_task_id"`
+	BizID      string               `json:"biz_id"`
+	Title      string               `json:"title"`
+	Status     domain.TaskStatus    `json:"status"`
+	Total      int64                `json:"total"`
+	Page       int                  `json:"page"`
+	PageSize   int                  `json:"page_size"`
+	Items      []domain.SubTaskView `json:"items"`
+}
+
 type CancelResult struct {
 	TaskID          uint64            `json:"task_id"`
 	Status          domain.TaskStatus `json:"status"`
@@ -332,6 +373,110 @@ func (s *Service) Get(ctx context.Context, id uint64) (*domain.MainTask, error) 
 		return nil, err
 	}
 	return task, nil
+}
+
+func (s *Service) List(ctx context.Context, q domain.ListCampaignQuery) (*CampaignListResult, error) {
+	page := q.Page
+	if page <= 0 {
+		page = 1
+	}
+	size := q.PageSize
+	if size <= 0 {
+		size = 20
+	}
+	if size > 100 {
+		size = 100
+	}
+	q.Page, q.PageSize = page, size
+
+	list, total, err := s.tasks.ListMainTasks(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]CampaignListItem, 0, len(list))
+	for i := range list {
+		t := list[i]
+		items = append(items, CampaignListItem{
+			ID:           t.ID,
+			BizID:        t.BizID,
+			BizScene:     t.BizScene,
+			Title:        t.Title,
+			Channel:      t.Channel,
+			Channels:     t.ChannelList(),
+			ChannelMode:  t.EffectiveChannelMode(),
+			Priority:     t.Priority.Normalize(),
+			TemplateID:   t.TemplateID,
+			Status:       t.Status,
+			TotalCount:   t.TotalCount,
+			SuccessCount: t.SuccessCount,
+			FailCount:    t.FailCount,
+			SubTaskTotal: t.SubTaskTotal,
+			SubTaskDone:  t.SubTaskDone,
+			ScheduledAt:  t.ScheduledAt,
+			StartedAt:    t.StartedAt,
+			FinishedAt:   t.FinishedAt,
+			CreatedAt:    t.CreatedAt,
+			UpdatedAt:    t.UpdatedAt,
+		})
+	}
+	return &CampaignListResult{Total: total, Page: page, PageSize: size, Items: items}, nil
+}
+
+func (s *Service) ListSubTasks(ctx context.Context, mainTaskID uint64, q domain.ListSubTaskQuery) (*SubTaskListResult, error) {
+	main, err := s.Get(ctx, mainTaskID)
+	if err != nil {
+		return nil, err
+	}
+	page := q.Page
+	if page <= 0 {
+		page = 1
+	}
+	size := q.PageSize
+	if size <= 0 {
+		size = 50
+	}
+	if size > 200 {
+		size = 200
+	}
+	q.Page, q.PageSize = page, size
+
+	list, total, err := s.tasks.ListSubTasks(ctx, mainTaskID, q)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]domain.SubTaskView, 0, len(list))
+	for _, st := range list {
+		items = append(items, st.ToView())
+	}
+	return &SubTaskListResult{
+		MainTaskID: main.ID,
+		BizID:      main.BizID,
+		Title:      main.Title,
+		Status:     main.Status,
+		Total:      total,
+		Page:       page,
+		PageSize:   size,
+		Items:      items,
+	}, nil
+}
+
+func (s *Service) GetSubTask(ctx context.Context, mainTaskID, subTaskID uint64) (*domain.SubTaskView, error) {
+	main, err := s.Get(ctx, mainTaskID)
+	if err != nil {
+		return nil, err
+	}
+	st, err := s.tasks.GetSubTask(ctx, subTaskID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errcode.NotFound
+		}
+		return nil, err
+	}
+	if st.MainTaskID != main.ID {
+		return nil, errcode.NotFound
+	}
+	view := st.ToView()
+	return &view, nil
 }
 
 func (s *Service) GetByBizID(ctx context.Context, bizID string) (*domain.MainTask, error) {

@@ -35,6 +35,52 @@ func (h *CampaignHandler) Create(c *gin.Context) {
 	response.OK(c, res)
 }
 
+func (h *CampaignHandler) List(c *gin.Context) {
+	var q domain.ListCampaignQuery
+	_ = c.ShouldBindQuery(&q)
+	res, err := h.svc.List(c.Request.Context(), q)
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+	response.OK(c, res)
+}
+
+func (h *CampaignHandler) ListSubTasks(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		response.Fail(c, errcode.InvalidParam)
+		return
+	}
+	var q domain.ListSubTaskQuery
+	_ = c.ShouldBindQuery(&q)
+	res, err := h.svc.ListSubTasks(c.Request.Context(), id, q)
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+	response.OK(c, res)
+}
+
+func (h *CampaignHandler) GetSubTask(c *gin.Context) {
+	mainID, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		response.Fail(c, errcode.InvalidParam)
+		return
+	}
+	subID, err := strconv.ParseUint(c.Param("sub_id"), 10, 64)
+	if err != nil {
+		response.Fail(c, errcode.InvalidParam)
+		return
+	}
+	res, err := h.svc.GetSubTask(c.Request.Context(), mainID, subID)
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+	response.OK(c, res)
+}
+
 func (h *CampaignHandler) Get(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {

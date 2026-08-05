@@ -85,6 +85,8 @@ type TaskRepository interface {
 	// ReopenMainTask 将 failed/partial 重新打开为 running，供失败重推（不含 running）
 	ReopenMainTask(ctx context.Context, id uint64, addSubTasks int) (bool, error)
 	ListPendingMainTasks(ctx context.Context, limit int) ([]domain.MainTask, error)
+	// ListMainTasks 分页列出主任务；keyword 模糊匹配 biz_id / title
+	ListMainTasks(ctx context.Context, q domain.ListCampaignQuery) ([]domain.MainTask, int64, error)
 
 	CreateSubTasks(ctx context.Context, tasks []domain.SubTask) error
 	// DeleteSubTasksByMainTask 删除主任务下全部子任务（卡单重拆前清理半成品）
@@ -101,6 +103,10 @@ type TaskRepository interface {
 	MaxShardIndex(ctx context.Context, mainTaskID uint64) (int, error)
 	// ListSubTasksByStatus 按状态列出子任务（失败重推解析用户）
 	ListSubTasksByStatus(ctx context.Context, mainTaskID uint64, status domain.TaskStatus) ([]domain.SubTask, error)
+	// ListSubTasks 分页列出主任务下子任务；status 空表示全部
+	ListSubTasks(ctx context.Context, mainTaskID uint64, q domain.ListSubTaskQuery) ([]domain.SubTask, int64, error)
+	// GetSubTask 按 ID 查询子任务
+	GetSubTask(ctx context.Context, id uint64) (*domain.SubTask, error)
 	// SyncMainCounters 对齐主任务计数（重推/重置后）
 	SyncMainCounters(ctx context.Context, id uint64, success, fail int64, subDone, subTotal int) error
 	// UpdateSubTaskResult 仅当仍由 workerID 认领且处于 running/retrying 时写入终态；updated=false 表示丢认领或已终态
