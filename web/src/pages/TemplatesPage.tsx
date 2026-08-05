@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { ApiError, api } from '../api/client'
 import type { ChannelType, Template, TemplateStatus } from '../api/types'
+import { useAuth } from '../auth/AuthContext'
 import { StatusChip } from '../components/StatusChip'
 import {
   BtnRow,
@@ -29,6 +30,8 @@ const emptyForm = {
 }
 
 export function TemplatesPage() {
+  const { user } = useAuth()
+  const operator = user?.username || 'admin'
   const [items, setItems] = useState<Template[]>([])
   const [total, setTotal] = useState(0)
   const [status, setStatus] = useState<TemplateStatus | ''>('')
@@ -99,7 +102,7 @@ export function TemplatesPage() {
           body: form.body,
           biz_scene: form.biz_scene,
           channel_hint: form.channel_hint || undefined,
-          created_by: 'console',
+          created_by: operator,
         }),
       '模板已创建',
     )
@@ -255,7 +258,7 @@ export function TemplatesPage() {
                           variant="primary"
                           type="button"
                           disabled={busy}
-                          onClick={() => void run(() => api.submitTemplate(t.id), '已提交审核')}
+                          onClick={() => void run(() => api.submitTemplate(t.id, operator), '已提交审核')}
                         >
                           提交
                         </Button>
@@ -275,7 +278,7 @@ export function TemplatesPage() {
                           variant="primary"
                           type="button"
                           disabled={busy}
-                          onClick={() => void run(() => api.approveTemplate(t.id), '已通过')}
+                          onClick={() => void run(() => api.approveTemplate(t.id, operator), '已通过')}
                         >
                           通过
                         </Button>
@@ -286,7 +289,7 @@ export function TemplatesPage() {
                           onClick={() => {
                             const reason = window.prompt('驳回原因', '文案需修改')
                             if (!reason) return
-                            void run(() => api.rejectTemplate(t.id, reason), '已驳回')
+                            void run(() => api.rejectTemplate(t.id, reason, operator), '已驳回')
                           }}
                         >
                           驳回

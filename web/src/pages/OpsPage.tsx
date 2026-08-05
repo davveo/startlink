@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { ApiError, api } from '../api/client'
 import type { ExportJob, FailureAgg, FunnelView, PushRecord } from '../api/types'
+import { useAuth } from '../auth/AuthContext'
 import { StatusChip } from '../components/StatusChip'
 import {
   BtnRow,
@@ -23,6 +24,7 @@ import {
 } from '../components/ui'
 
 export function OpsPage() {
+  const { user } = useAuth()
   const { id: idParam } = useParams()
   const [search] = useSearchParams()
   const initialId = idParam || search.get('task') || ''
@@ -70,7 +72,7 @@ export function OpsPage() {
     setBusy(true)
     setErr('')
     try {
-      const job = await api.createExport(id, kind)
+      const job = await api.createExport(id, kind, user?.username)
       setExportJob(job)
       setMsg(`导出任务 #${job.id} 已创建`)
       const timer = window.setInterval(async () => {

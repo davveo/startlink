@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { ApiError, api } from '../api/client'
 import type { ChannelMode, ChannelType, Priority, ProgressView, Template } from '../api/types'
+import { useAuth } from '../auth/AuthContext'
 import { StatusChip } from '../components/StatusChip'
 import {
   BtnRow,
@@ -22,6 +23,7 @@ import {
 } from '../components/ui'
 
 export function CampaignsPage() {
+  const { user } = useAuth()
   const [searchParams] = useSearchParams()
   const [templates, setTemplates] = useState<Template[]>([])
   const [channels, setChannels] = useState<ChannelType[]>([])
@@ -44,12 +46,18 @@ export function CampaignsPage() {
     channel_mode: 'single' as ChannelMode,
     priority: 'normal' as Priority,
     pace_qps: '',
-    created_by: 'console',
+    created_by: '',
     as_draft: false,
   })
   const [preflightText, setPreflightText] = useState('')
   const [dryRunText, setDryRunText] = useState('')
   const [estimateText, setEstimateText] = useState('')
+
+  useEffect(() => {
+    if (user?.username) {
+      setForm((f) => (f.created_by ? f : { ...f, created_by: user.username }))
+    }
+  }, [user?.username])
 
   useEffect(() => {
     void (async () => {
