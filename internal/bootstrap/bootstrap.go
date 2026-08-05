@@ -12,6 +12,7 @@ import (
 	"github.com/starlink/push/internal/adapter/webhook"
 	"github.com/starlink/push/internal/config"
 	"github.com/starlink/push/internal/port"
+	"github.com/starlink/push/pkg/applog"
 	"gorm.io/gorm"
 )
 
@@ -37,7 +38,12 @@ func NewInfra(cfgPath string) (*Infra, error) {
 		return nil, err
 	}
 
-	db, err := repo.NewDB(cfg.MySQL.DSN, cfg.MySQL.MaxIdle, cfg.MySQL.MaxOpen)
+	applog.Init(applog.Options{
+		Level:  cfg.Log.Level,
+		Format: cfg.Log.Format,
+	})
+
+	db, err := repo.NewDB(cfg.MySQL.DSN, cfg.MySQL.MaxIdle, cfg.MySQL.MaxOpen, applog.NewGormLogger(cfg.Log.Level))
 	if err != nil {
 		return nil, err
 	}

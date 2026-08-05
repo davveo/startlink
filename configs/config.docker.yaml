@@ -2,6 +2,10 @@ server:
   addr: ":8080"
   mode: release
 
+log:
+  level: info
+  format: text
+
 mysql:
   dsn: "root:root@tcp(mysql:3306)/starlink?charset=utf8mb4&parseTime=True&loc=Local"
   max_idle: 10

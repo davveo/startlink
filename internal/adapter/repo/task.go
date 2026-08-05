@@ -10,6 +10,7 @@ import (
 	mysqldriver "github.com/go-sql-driver/mysql"
 	"github.com/starlink/push/internal/domain"
 	"github.com/starlink/push/internal/port"
+	"github.com/starlink/push/pkg/applog"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -20,9 +21,12 @@ type TaskRepo struct {
 	db *gorm.DB
 }
 
-func NewDB(dsn string, maxIdle, maxOpen int) (*gorm.DB, error) {
+func NewDB(dsn string, maxIdle, maxOpen int, gormLogger logger.Interface) (*gorm.DB, error) {
+	if gormLogger == nil {
+		gormLogger = applog.NewGormLogger("warn")
+	}
 	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Warn),
+		Logger: gormLogger,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("open mysql: %w", err)
@@ -436,6 +440,9 @@ func (r *TaskRepo) DeleteSubTasksByMainTask(ctx context.Context, mainTaskID uint
 	return res.RowsAffected, res.Error
 }
 
+// errClaimEmpty 表示本轮没有可认领子任务（空闲轮询，非故障）
+var errClaimEmpty = errors.New("no claimable subtask")
+
 // ClaimSubTask 使用 FOR UPDATE SKIP LOCKED 实现多实例水平扩展认领。
 // 仅认领「主任务仍为 running 且拆分租约已清」且「子任务 pending/retrying/超时 running」的记录。
 func (r *TaskRepo) ClaimSubTask(ctx context.Context, workerID string, claimTimeoutSec int) (*domain.SubTask, error) {
@@ -443,6 +450,7 @@ func (r *TaskRepo) ClaimSubTask(ctx context.Context, workerID string, claimTimeo
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var st domain.SubTask
 		timeout := time.Now().Add(-time.Duration(claimTimeoutSec) * time.Second)
+		// 用 Find 而不是 First：空队列时不产生 ErrRecordNotFound
 		err := tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
 			Table("sub_tasks").
 			Select("sub_tasks.*").
@@ -455,9 +463,12 @@ func (r *TaskRepo) ClaimSubTask(ctx context.Context, workerID string, claimTimeo
 			)`, domain.TaskStatusPending, domain.TaskStatusRetrying, domain.TaskStatusRunning, timeout).
 			Order("sub_tasks.id ASC").
 			Limit(1).
-			First(&st).Error
+			Find(&st).Error
 		if err != nil {
 			return err
+		}
+		if st.ID == 0 {
+			return errClaimEmpty
 		}
 		now := time.Now()
 		res := tx.Model(&domain.SubTask{}).
@@ -476,7 +487,7 @@ func (r *TaskRepo) ClaimSubTask(ctx context.Context, workerID string, claimTimeo
 			return res.Error
 		}
 		if res.RowsAffected == 0 {
-			return gorm.ErrRecordNotFound
+			return errClaimEmpty
 		}
 		st.Status = domain.TaskStatusRunning
 		st.WorkerID = workerID
@@ -485,7 +496,7 @@ func (r *TaskRepo) ClaimSubTask(ctx context.Context, workerID string, claimTimeo
 		claimed = &st
 		return nil
 	})
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, errClaimEmpty) {
 		return nil, nil
 	}
 	return claimed, err

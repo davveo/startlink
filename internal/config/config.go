@@ -10,6 +10,7 @@ import (
 
 type Config struct {
 	Server       ServerConfig       `yaml:"server"`
+	Log          LogConfig          `yaml:"log"`
 	MySQL        MySQLConfig        `yaml:"mysql"`
 	Redis        RedisConfig        `yaml:"redis"`
 	MQ           MQConfig           `yaml:"mq"`
@@ -21,6 +22,14 @@ type Config struct {
 	Freq         FreqConfig         `yaml:"freq"`
 	Compliance   ComplianceConfig   `yaml:"compliance"`
 	ChannelQuota ChannelQuotaConfig `yaml:"channel_quota"`
+}
+
+// LogConfig 全局日志
+type LogConfig struct {
+	// Level debug|info|warn|error，默认 info
+	Level string `yaml:"level"`
+	// Format text|json，默认 text；text 形如：2026-08-05 18:52:26 [INFO] msg key=value
+	Format string `yaml:"format"`
 }
 
 type ServerConfig struct {
@@ -257,6 +266,12 @@ func Load(path string) (*Config, error) {
 func (c *Config) applyDefaults() {
 	if c.Server.Addr == "" {
 		c.Server.Addr = ":8080"
+	}
+	if c.Log.Level == "" {
+		c.Log.Level = "info"
+	}
+	if c.Log.Format == "" {
+		c.Log.Format = "text"
 	}
 	if c.Scheduler.BatchSize <= 0 {
 		c.Scheduler.BatchSize = 200

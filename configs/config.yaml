@@ -2,6 +2,10 @@ server:
   addr: ":8080"
   mode: debug # debug | release
 
+log:
+  level: info   # debug | info | warn | error
+  format: text  # text | json；text 形如：2026-08-05 18:52:26 [INFO] msg key=value
+
 mysql:
   dsn: "root:root@tcp(127.0.0.1:3306)/starlink?charset=utf8mb4&parseTime=True&loc=Local"
   max_idle: 10

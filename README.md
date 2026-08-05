@@ -10,6 +10,8 @@ Starlink 是一个用 Go 编写的异步推送平台骨架。业务方通过 HTT
 - [架构与处理流程](#架构与处理流程)
 - [环境要求](#环境要求)
 - [快速开始](#快速开始)
+  - [Docker Compose（推荐）](#docker-compose推荐)
+  - [Docker 常用管理命令](#docker-常用管理命令)
 - [完整联调示例](#完整联调示例)
 - [配置](#配置)
 - [HTTP API](#http-api)
@@ -115,24 +117,10 @@ api ───────────────► MySQL
 
 ### Docker Compose（推荐）
 
-用 Makefile 管理全栈（推荐）：
-
 ```bash
-make up          # 或 make start：构建并启动
-make status      # 或 make ps：查看状态
-make logs        # 跟踪 api / scheduler / pusher / web 日志
-make down        # 或 make stop：停止（保留数据卷）
-make help        # 查看全部 Docker 命令
-```
-
-等价裸命令：
-
-```bash
-docker compose up -d --build
+make up
 curl http://localhost:8080/healthz
 open http://localhost:3000
-docker compose logs -f api scheduler pusher web
-docker compose down
 ```
 
 默认会启动：
@@ -144,10 +132,50 @@ docker compose down
 | MySQL | `localhost:3306/starlink` | `root` / `root` |
 | Redis | `localhost:6379` | 无密码 |
 
-注意：仅 `api` 服务声明后端 `build` 并产出 `starlink:latest`；`scheduler` / `pusher` 复用该镜像，并等待 `api` healthy 后再启动。前端为独立镜像 `starlink-web:latest`（`web/Dockerfile`），nginx 将 `/api` 反代到 `api:8080`。仅重建后端：`make rebuild-api`；仅重建前端：`make rebuild-web`。
+注意：仅 `api` 服务声明后端 `build` 并产出 `starlink:latest`；`scheduler` / `pusher` 复用该镜像，并等待 `api` healthy 后再启动。前端为独立镜像 `starlink-web:latest`（`web/Dockerfile`），nginx 将 `/api` 反代到 `api:8080`。
 
-删除本地 MySQL/Redis 数据卷：`make down-v`（等同 `docker compose down -v`，不可恢复）。
+### Docker 常用管理命令
 
+项目根目录通过 `Makefile` 封装 Compose 启停，推荐优先使用：
+
+| 命令 | 说明 |
+| --- | --- |
+| `make up` / `make start` | 启动全栈（含 mysql/redis；复用本地镜像，缺失才 build） |
+| `make down` / `make stop` | 停止并移除**全部**容器，**保留** MySQL/Redis 数据卷 |
+| `make restart` | **仅**重启应用：`api` / `scheduler` / `pusher` / `web`（**不动** mysql/redis） |
+| `make status` / `make ps` | 查看容器状态 |
+| `make logs` | 跟踪应用日志：`api` / `scheduler` / `pusher` / `web` |
+| `make rebuild` | **仅**重建并重启应用服务（**不动** mysql/redis） |
+| `make rebuild-api` | 仅重建后端 `api` 镜像，并重启 api/scheduler/pusher |
+| `make rebuild-web` | 仅重建前端 `web` 镜像并重启 web |
+| `make down-v` | 停止并**删除**数据卷（不可恢复） |
+| `make help` | 打印上述命令帮助 |
+
+示例：
+
+```bash
+make up          # 启动全栈（含 mysql/redis）
+make restart     # 只重启应用，mysql/redis 保持运行
+make rebuild     # 只重建/重启应用，mysql/redis 保持运行
+make status      # 查看状态
+make logs        # 看应用日志（Ctrl+C 退出跟踪，不影响容器）
+make down        # 停止全部容器，数据卷保留
+make down-v      # 停止并清空本地 MySQL/Redis 数据（危险）
+```
+
+若 `make rebuild` / 首次构建失败：前端改为**宿主机 `npm run build`**，Docker 只基于已缓存的 `alpine:3.20` 安装 nginx 打包静态资源，不再拉取 Docker Hub 的 `node`/`nginx` 镜像。需本机已安装 Node.js。若 alpine 的 `apk` 也很慢，可配置 Alpine 镜像源或检查网络。
+
+等价裸命令（不经过 Makefile）：
+
+```bash
+docker compose up -d
+docker compose restart api scheduler pusher web
+docker compose up -d --build --force-recreate api scheduler pusher web
+docker compose ps
+docker compose logs -f api scheduler pusher web
+docker compose down
+docker compose down -v
+```
 ### 本地运行
 
 ```sql
@@ -336,6 +364,8 @@ curl http://localhost:8080/api/v1/campaigns/biz/campaign-001
 | --- | --- | --- | --- |
 | `server.addr` | API 监听地址 | `:8080` | `:8080` |
 | `server.mode` | Gin 模式，`debug`/`release` | 空（Gin 默认） | `debug` / docker `release` |
+| `log.level` | 日志等级：`debug`/`info`/`warn`/`error` | `info` | `info` |
+| `log.format` | 日志格式：`text`（带 `[INFO]`/`[ERROR]`）或 `json` | `text` | `text` |
 | `mysql.dsn` | MySQL DSN | 无，必须配置 | 本地 `127.0.0.1:3306` |
 | `mysql.max_idle` | 最大空闲连接数 | 未补默认值，缺省即 `0` | `10` |
 | `mysql.max_open` | 最大连接数 | 未补默认值，缺省即无限制 | `50` |
@@ -958,6 +988,21 @@ pending → running ⇄ paused
 35. **~~Compose 服务耦合镜像构建顺序~~（已修复）。** 三服务均自带 `build`，不再依赖 api 先起。
 
 ## 运维与排查
+
+业务日志统一带等级前缀，便于过滤：
+
+```bash
+make logs
+# 或
+docker compose logs -f api scheduler pusher
+
+# 只看错误 / 警告
+docker compose logs api scheduler pusher 2>&1 | grep '\[ERROR\]'
+docker compose logs api scheduler pusher 2>&1 | grep -E '\[ERROR\]|\[WARN\]'
+```
+
+`text` 格式示例：`2026-08-05 18:55:53 [INFO] mq ready driver=redis_stream ...`  
+也可在配置里设 `log.format: json`，按 `"level":"ERROR"` 过滤。等级由 `log.level` 控制（`debug`/`info`/`warn`/`error`）。
 
 查看队列积压、PEL 与死信：
 
