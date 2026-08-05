@@ -112,7 +112,8 @@ func isDeferredRequeue(err error) bool {
 	return errors.Is(err, domain.ErrMainTaskPaused) ||
 		errors.Is(err, domain.ErrOutsideSendWindow) ||
 		errors.Is(err, domain.ErrQuietHours) ||
-		errors.Is(err, domain.ErrChannelThrottled)
+		errors.Is(err, domain.ErrChannelThrottled) ||
+		errors.Is(err, domain.ErrMainStatusUnavailable)
 }
 
 // RedisStream 基于 Redis Stream 的 MQ：Consumer Group + PEL 重投 + DLQ + 容量治理

@@ -78,7 +78,7 @@ func (s *stubSender) Send(ctx context.Context, req domain.SendRequest) (*domain.
 	time.Sleep(2 * time.Millisecond)
 	id := fmt.Sprintf("%s-%s-%d", s.ch, req.UserID, time.Now().UnixNano())
 	slog.Debug("channel stub send", "channel", s.ch, "user", req.UserID, "title", req.Title, "provider_id", id)
-	return &domain.SendResult{Success: true, ProviderID: id}, nil
+	return &domain.SendResult{Success: true, Provider: string(s.ch), ProviderID: id}, nil
 }
 
 // httpSender POST SendRequest → SendResult；按 HTTP 状态映射 Retryable
@@ -101,6 +101,8 @@ func NewHTTPSender(ch domain.ChannelType, url string, timeoutSec int) port.Chann
 
 func (s *httpSender) Channel() domain.ChannelType { return s.ch }
 
+const maxHTTPResponseBytes = 1 << 20 // 1 MiB
+
 func (s *httpSender) Send(ctx context.Context, req domain.SendRequest) (*domain.SendResult, error) {
 	raw, err := json.Marshal(req)
 	if err != nil {
@@ -116,7 +118,17 @@ func (s *httpSender) Send(ctx context.Context, req domain.SendRequest) (*domain.
 		return &domain.SendResult{Success: false, ErrorMsg: err.Error(), Retryable: true}, nil
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxHTTPResponseBytes+1))
+	if err != nil {
+		return &domain.SendResult{Success: false, ErrorMsg: err.Error(), Retryable: true}, nil
+	}
+	if len(body) > maxHTTPResponseBytes {
+		return &domain.SendResult{
+			Success:   false,
+			ErrorMsg:  fmt.Sprintf("channel http response too large (>%d bytes)", maxHTTPResponseBytes),
+			Retryable: false,
+		}, nil
+	}
 
 	if resp.StatusCode >= 500 || resp.StatusCode == 429 {
 		return &domain.SendResult{
@@ -138,8 +150,15 @@ func (s *httpSender) Send(ctx context.Context, req domain.SendRequest) (*domain.
 	if len(body) > 0 {
 		if err := json.Unmarshal(body, &result); err != nil {
 			// 2xx 但非 JSON：视为成功，用响应体前缀作 provider_id
-			return &domain.SendResult{Success: true, ProviderID: trunc(string(body), 64)}, nil
+			return &domain.SendResult{
+				Success:    true,
+				Provider:   string(s.ch),
+				ProviderID: trunc(string(body), 64),
+			}, nil
 		}
+	}
+	if result.Provider == "" {
+		result.Provider = string(s.ch)
 	}
 	if result.ProviderID == "" && result.Success {
 		result.ProviderID = fmt.Sprintf("%s-%s-%d", s.ch, req.UserID, time.Now().UnixNano())

@@ -86,11 +86,27 @@ type SendRequest struct {
 // SendResult 渠道发送结果
 type SendResult struct {
 	Success    bool   `json:"success"`
+	Provider   string `json:"provider,omitempty"` // 供应商标识；空则回退为 channel 名
 	ProviderID string `json:"provider_id,omitempty"`
 	ErrorMsg   string `json:"error_msg,omitempty"`
 	Retryable  bool   `json:"retryable"`
 	// Throttled 厂商限流（如 HTTP 429）；Pusher 可据此收缩渠道有效 QPS
 	Throttled bool `json:"throttled,omitempty"`
+}
+
+// MergeExtra 合并活动 Payload 与用户 Extra：用户字段覆盖同名活动字段。
+func MergeExtra(campaign, user map[string]any) map[string]any {
+	if len(campaign) == 0 && len(user) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(campaign)+len(user))
+	for k, v := range campaign {
+		out[k] = v
+	}
+	for k, v := range user {
+		out[k] = v
+	}
+	return out
 }
 
 // CreateCampaignInput 创建推送活动的通用入参（应用层 API）

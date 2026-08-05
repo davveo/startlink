@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/google/uuid"
+	"github.com/starlink/push/internal/adapter/audience"
 	"github.com/starlink/push/internal/bootstrap"
 	"github.com/starlink/push/internal/port"
 	"github.com/starlink/push/internal/push"
@@ -47,6 +48,7 @@ func main() {
 		infra.Cfg.Pusher.MaxRetry,
 		infra.Cfg.Pusher.DedupTTLSec,
 		infra.Cfg.Freq,
+		audience.NewUnsubscribeFilter(infra.Redis.RDB(), infra.Cfg.Compliance.UnsubscribeKeyPrefix),
 	)
 
 	baseID := "pusher-" + uuid.NewString()[:8]

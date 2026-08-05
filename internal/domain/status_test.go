@@ -17,6 +17,12 @@ func TestPushStatusCanTransitTo(t *testing.T) {
 		{PushStatusFailed, PushStatusSending, true},
 		{PushStatusSending, PushStatusQueued, true},
 		{PushStatusDelivered, PushStatusDelivered, true},
+		{PushStatusSending, PushStatusSuppressed, true},
+		{PushStatusQueued, PushStatusUnreachable, true},
+		{PushStatusSuppressed, PushStatusSending, true},
+		{PushStatusExpired, PushStatusQueued, true},
+		{PushStatusQuotaRejected, PushStatusSending, true},
+		{PushStatusSent, PushStatusSuppressed, false},
 	}
 	for _, c := range cases {
 		if got := c.from.CanTransitTo(c.to); got != c.ok {

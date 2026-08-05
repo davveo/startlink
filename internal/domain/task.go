@@ -110,32 +110,44 @@ type SubTask struct {
 func (SubTask) TableName() string { return "sub_tasks" }
 
 // PushRecord 推送流水。唯一键 (main_task_id, user_id, channel) 防重复投递。
+// 渠道回执定位：(provider, channel, provider_id)；provider_id 为空时不占唯一约束（MySQL NULL 可多行）。
 type PushRecord struct {
 	ID         uint64      `gorm:"primaryKey;autoIncrement" json:"id"`
 	MainTaskID uint64      `gorm:"uniqueIndex:uk_task_user_channel;not null" json:"main_task_id"`
 	SubTaskID  uint64      `gorm:"index;not null" json:"sub_task_id"`
 	UserID     string      `gorm:"size:64;uniqueIndex:uk_task_user_channel;not null" json:"user_id"`
-	Channel    ChannelType `gorm:"size:32;uniqueIndex:uk_task_user_channel;not null" json:"channel"`
+	Channel    ChannelType `gorm:"size:32;uniqueIndex:uk_task_user_channel;uniqueIndex:uk_provider_ref;not null" json:"channel"`
 	Content    string      `gorm:"type:text" json:"content"`
 	Status     PushStatus  `gorm:"size:32;not null;index;default:queued" json:"status"`
-	ProviderID string      `gorm:"size:128;index" json:"provider_id,omitempty"` // 渠道侧消息 ID
-	ErrorMsg   string      `gorm:"size:512" json:"error_msg,omitempty"`
-	SentAt     *time.Time  `json:"sent_at,omitempty"`
-	CreatedAt  time.Time   `json:"created_at"`
-	UpdatedAt  time.Time   `json:"updated_at"`
+	// Provider 渠道供应商标识（默认与 channel 同名，HTTP 适配器可覆盖）
+	Provider string `gorm:"size:64;uniqueIndex:uk_provider_ref" json:"provider,omitempty"`
+	// ProviderID 渠道侧消息 ID；未发送时为 NULL，避免空串撞唯一键
+	ProviderID *string    `gorm:"size:128;uniqueIndex:uk_provider_ref" json:"provider_id,omitempty"`
+	ErrorMsg   string     `gorm:"size:512" json:"error_msg,omitempty"`
+	SentAt     *time.Time `json:"sent_at,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
 }
 
 func (PushRecord) TableName() string { return "push_records" }
 
-// PushReceipt 回执
+// ProviderIDValue 安全读取 provider_id
+func (r *PushRecord) ProviderIDValue() string {
+	if r == nil || r.ProviderID == nil {
+		return ""
+	}
+	return *r.ProviderID
+}
+
+// PushReceipt 回执；(push_record_id, event) 唯一，保证幂等
 type PushReceipt struct {
 	ID           uint64       `gorm:"primaryKey;autoIncrement" json:"id"`
-	PushRecordID uint64       `gorm:"index;not null" json:"push_record_id"`
+	PushRecordID uint64       `gorm:"uniqueIndex:uk_receipt_record_event;not null" json:"push_record_id"`
 	MainTaskID   uint64       `gorm:"index;not null" json:"main_task_id"`
 	SubTaskID    uint64       `gorm:"index;not null" json:"sub_task_id"`
 	UserID       string       `gorm:"size:64;index;not null" json:"user_id"`
 	Channel      ChannelType  `gorm:"size:32;not null" json:"channel"`
-	Event        ReceiptEvent `gorm:"size:32;not null;index" json:"event"`
+	Event        ReceiptEvent `gorm:"size:32;uniqueIndex:uk_receipt_record_event;not null;index" json:"event"`
 	RawPayload   string       `gorm:"type:text" json:"raw_payload,omitempty"`
 	CreatedAt    time.Time    `json:"created_at"`
 }

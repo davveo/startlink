@@ -13,12 +13,20 @@ import (
 	"github.com/starlink/push/pkg/errcode"
 )
 
+const (
+	defaultMaxAudiencePages = 10000
+	defaultMaxAudienceUsers = 5_000_000
+	defaultMaxPageSize      = 2000
+)
+
 // Splitter 将主任务按用户分片拆成子任务（流式落库：边圈人边 CreateSubTasks）
 type Splitter struct {
 	tasks     port.TaskRepository
 	audience  AudienceResolver
 	limiter   port.ChannelLimiter
 	batchSize int
+	maxPages  int
+	maxUsers  int64
 }
 
 // AudienceResolver 抽象人群解析，避免 scheduler 直接依赖 adapter
@@ -27,7 +35,20 @@ type AudienceResolver interface {
 }
 
 func NewSplitter(tasks port.TaskRepository, audience AudienceResolver, limiter port.ChannelLimiter, batchSize int) *Splitter {
-	return &Splitter{tasks: tasks, audience: audience, limiter: limiter, batchSize: batchSize}
+	if batchSize <= 0 {
+		batchSize = 200
+	}
+	if batchSize > defaultMaxPageSize {
+		batchSize = defaultMaxPageSize
+	}
+	return &Splitter{
+		tasks:     tasks,
+		audience:  audience,
+		limiter:   limiter,
+		batchSize: batchSize,
+		maxPages:  defaultMaxAudiencePages,
+		maxUsers:  defaultMaxAudienceUsers,
+	}
 }
 
 func (s *Splitter) Split(ctx context.Context, main *domain.MainTask, owner string) error {
@@ -44,8 +65,14 @@ func (s *Splitter) Split(ctx context.Context, main *domain.MainTask, owner strin
 	shard := 0
 	var total int64
 	wroteAny := false
+	pages := 0
 
 	for {
+		pages++
+		if pages > s.maxPages {
+			return fmt.Errorf("%w: max pages %d", domain.ErrAudienceLimitExceeded, s.maxPages)
+		}
+
 		cur, err := s.tasks.GetMainTask(ctx, main.ID)
 		if err != nil {
 			return err
@@ -67,12 +94,16 @@ func (s *Splitter) Split(ctx context.Context, main *domain.MainTask, owner strin
 			}
 		}
 
+		pageSize := s.batchSize
+		if pageSize > defaultMaxPageSize {
+			pageSize = defaultMaxPageSize
+		}
 		page, err := s.audience.Resolve(ctx, domain.AudienceQuery{
 			AudienceRef: main.AudienceRef,
 			BizScene:    main.BizScene,
 			Extra:       extra,
 			PageToken:   pageToken,
-			PageSize:    s.batchSize,
+			PageSize:    pageSize,
 		})
 		if err != nil {
 			return fmt.Errorf("resolve audience: %w", err)
@@ -85,6 +116,7 @@ func (s *Splitter) Split(ctx context.Context, main *domain.MainTask, owner strin
 			ids := make([]string, 0, len(page.Users))
 			varMap := make(map[string]map[string]string)
 			chMap := make(map[string][]domain.ChannelType)
+			extraMap := make(map[string]map[string]any)
 
 			abPercent := -1
 			if extra != nil {
@@ -115,12 +147,19 @@ func (s *Splitter) Split(ctx context.Context, main *domain.MainTask, owner strin
 				if len(u.Channels) > 0 {
 					chMap[u.UserID] = chs
 				}
+				if len(u.Extra) > 0 {
+					extraMap[u.UserID] = u.Extra
+				}
 			}
 			if len(ids) == 0 {
 				if !page.HasMore {
 					break
 				}
-				pageToken = page.NextPageToken
+				next, err := advancePageToken(pageToken, page)
+				if err != nil {
+					return err
+				}
+				pageToken = next
 				continue
 			}
 			payload := map[string]any{"user_ids": ids}
@@ -129,6 +168,10 @@ func (s *Splitter) Split(ctx context.Context, main *domain.MainTask, owner strin
 			}
 			if len(chMap) > 0 {
 				payload["channels"] = chMap
+			}
+			if len(extraMap) > 0 {
+				// 用户级 Extra（手机号/邮箱/device token 等）随子任务落库；敏感字段建议上游加密或短期保留
+				payload["extras"] = extraMap
 			}
 			raw, _ := json.Marshal(payload)
 			batch := []domain.SubTask{{
@@ -143,6 +186,9 @@ func (s *Splitter) Split(ctx context.Context, main *domain.MainTask, owner strin
 			}
 			wroteAny = true
 			total += int64(len(ids))
+			if total > s.maxUsers {
+				return fmt.Errorf("%w: max users %d", domain.ErrAudienceLimitExceeded, s.maxUsers)
+			}
 			shard++
 			// 仅更新 total_count；sub_task_total 收尾再写，避免拆分中途被 Claim/聚合终态
 			if err := s.tasks.PatchMainMeta(ctx, main.ID, total, 0); err != nil {
@@ -152,7 +198,11 @@ func (s *Splitter) Split(ctx context.Context, main *domain.MainTask, owner strin
 		if !page.HasMore {
 			break
 		}
-		pageToken = page.NextPageToken
+		next, err := advancePageToken(pageToken, page)
+		if err != nil {
+			return err
+		}
+		pageToken = next
 	}
 
 	if !wroteAny {
@@ -194,6 +244,21 @@ func (s *Splitter) Split(ctx context.Context, main *domain.MainTask, owner strin
 
 	s.checkOverCapacity(ctx, main, total)
 	return nil
+}
+
+// advancePageToken 校验分页游标前进，防止 HasMore=true 且 token 空/重复导致死循环。
+func advancePageToken(prev string, page *domain.AudiencePage) (string, error) {
+	if page == nil {
+		return "", domain.ErrAudiencePageStuck
+	}
+	next := page.NextPageToken
+	if next == "" {
+		return "", fmt.Errorf("%w: HasMore without NextPageToken", domain.ErrAudiencePageStuck)
+	}
+	if next == prev {
+		return "", fmt.Errorf("%w: NextPageToken unchanged", domain.ErrAudiencePageStuck)
+	}
+	return next, nil
 }
 
 // checkOverCapacity 拆分后按渠道配额估算是否超容量（三期）

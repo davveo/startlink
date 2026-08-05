@@ -33,6 +33,7 @@ func TestShouldDeadLetter(t *testing.T) {
 		{"quiet hours never", 99, 5, domain.ErrQuietHours, false},
 		{"channel throttled never", 99, 5, domain.ErrChannelThrottled, false},
 		{"send window never", 99, 5, domain.ErrOutsideSendWindow, false},
+		{"status unavailable never", 99, 5, domain.ErrMainStatusUnavailable, false},
 		{"max disabled", 10, 0, errors.New("fail"), false},
 		{"nil err at max", 5, 5, nil, true},
 	}

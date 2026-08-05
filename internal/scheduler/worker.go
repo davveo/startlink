@@ -246,6 +246,7 @@ type subPayload struct {
 	UserIDs  []string                        `json:"user_ids"`
 	Vars     map[string]map[string]string    `json:"vars"`
 	Channels map[string][]domain.ChannelType `json:"channels"`
+	Extras   map[string]map[string]any       `json:"extras"`
 }
 
 var (
@@ -274,9 +275,9 @@ func (w *Worker) processSubTask(ctx context.Context, st *domain.SubTask) error {
 		return fmt.Errorf("parse user_ids: %w", err)
 	}
 
-	var extra map[string]any
+	var campaignExtra map[string]any
 	if main.Payload != "" && main.Payload != "null" {
-		_ = json.Unmarshal([]byte(main.Payload), &extra)
+		_ = json.Unmarshal([]byte(main.Payload), &campaignExtra)
 	}
 
 	msgs := make([]domain.PushMessage, 0, len(payload.UserIDs))
@@ -297,6 +298,8 @@ func (w *Worker) processSubTask(ctx context.Context, st *domain.SubTask) error {
 			mode = domain.ChannelModeSingle
 		}
 		vars := payload.Vars[uid]
+		// 覆盖顺序：活动 Payload 为底，用户 Extra 覆盖同名键（手机号/token 等以用户为准）
+		merged := domain.MergeExtra(campaignExtra, payload.Extras[uid])
 		msgs = append(msgs, domain.PushMessage{
 			MsgID:       fmt.Sprintf("%d-%d-%s", st.MainTaskID, st.ID, uid),
 			MainTaskID:  st.MainTaskID,
@@ -309,7 +312,7 @@ func (w *Worker) processSubTask(ctx context.Context, st *domain.SubTask) error {
 			Title:       main.Title,
 			Body:        main.TemplateBody,
 			Vars:        vars,
-			Extra:       extra,
+			Extra:       merged,
 			BizScene:    main.BizScene,
 			Priority:    prio,
 			CreatedAt:   now,

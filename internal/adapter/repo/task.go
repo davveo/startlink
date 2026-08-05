@@ -51,6 +51,42 @@ INNER JOIN (
    AND pr.id <> d.keep_id
 `).Error
 
+	// 先补齐 provider 列，再清洗数据，最后 AutoMigrate 建唯一索引
+	if db.Migrator().HasTable(&domain.PushRecord{}) {
+		if !db.Migrator().HasColumn(&domain.PushRecord{}, "Provider") {
+			_ = db.Migrator().AddColumn(&domain.PushRecord{}, "Provider")
+		}
+	}
+
+	_ = db.Exec(`UPDATE push_records SET provider_id = NULL WHERE provider_id = ''`).Error
+	_ = db.Exec(`UPDATE push_records SET provider = channel WHERE (provider IS NULL OR provider = '') AND channel IS NOT NULL AND channel <> ''`).Error
+
+	_ = db.Exec(`
+DELETE pr FROM push_receipts pr
+INNER JOIN (
+  SELECT push_record_id, event, MAX(id) AS keep_id
+  FROM push_receipts
+  GROUP BY push_record_id, event
+  HAVING COUNT(*) > 1
+) d ON pr.push_record_id = d.push_record_id
+   AND pr.event = d.event
+   AND pr.id <> d.keep_id
+`).Error
+
+	_ = db.Exec(`
+DELETE pr FROM push_records pr
+INNER JOIN (
+  SELECT provider, channel, provider_id, MAX(id) AS keep_id
+  FROM push_records
+  WHERE provider_id IS NOT NULL AND provider_id <> ''
+  GROUP BY provider, channel, provider_id
+  HAVING COUNT(*) > 1
+) d ON IFNULL(pr.provider,'') = IFNULL(d.provider,'')
+   AND pr.channel = d.channel
+   AND pr.provider_id = d.provider_id
+   AND pr.id <> d.keep_id
+`).Error
+
 	return db.AutoMigrate(
 		&domain.MainTask{},
 		&domain.SubTask{},
@@ -552,6 +588,10 @@ func NewPushRepo(db *gorm.DB) *PushRepo {
 }
 
 func (r *PushRepo) UpdateRecordStatus(ctx context.Context, id uint64, status domain.PushStatus, providerID, errMsg string) error {
+	return r.UpdateRecordDelivery(ctx, id, status, "", providerID, errMsg)
+}
+
+func (r *PushRepo) UpdateRecordDelivery(ctx context.Context, id uint64, status domain.PushStatus, provider, providerID, errMsg string) error {
 	var rec domain.PushRecord
 	if err := r.db.WithContext(ctx).Where("id = ?", id).First(&rec).Error; err != nil {
 		return err
@@ -560,16 +600,19 @@ func (r *PushRepo) UpdateRecordStatus(ctx context.Context, id uint64, status dom
 		// 过期/回退事件：幂等忽略，避免冲掉已前进状态
 		return nil
 	}
-	if rec.Status == status && providerID == "" && errMsg == "" {
+	if rec.Status == status && provider == "" && providerID == "" && errMsg == "" {
 		return nil
 	}
 
 	updates := map[string]any{"status": status}
+	if provider != "" {
+		updates["provider"] = provider
+	}
 	if providerID != "" {
 		updates["provider_id"] = providerID
 	}
 	switch {
-	case status == domain.PushStatusFailed:
+	case status == domain.PushStatusFailed || status.IsSuppressedLike():
 		if errMsg != "" {
 			updates["error_msg"] = errMsg
 		}
@@ -588,33 +631,69 @@ func (r *PushRepo) UpdateRecordStatus(ctx context.Context, id uint64, status dom
 	return r.db.WithContext(ctx).Model(&domain.PushRecord{}).Where("id = ?", id).Updates(updates).Error
 }
 
-func (r *PushRepo) GetRecordByProviderID(ctx context.Context, providerID string) (*domain.PushRecord, error) {
+func (r *PushRepo) GetRecordByProviderRef(ctx context.Context, provider string, channel domain.ChannelType, providerID string) (*domain.PushRecord, error) {
+	if providerID == "" {
+		return nil, gorm.ErrRecordNotFound
+	}
 	var rec domain.PushRecord
-	if err := r.db.WithContext(ctx).Where("provider_id = ?", providerID).First(&rec).Error; err != nil {
+	q := r.db.WithContext(ctx).Where("provider_id = ?", providerID)
+	if provider != "" {
+		q = q.Where("provider = ?", provider)
+	}
+	if channel != "" {
+		q = q.Where("channel = ?", channel)
+	}
+	if err := q.First(&rec).Error; err != nil {
 		return nil, err
 	}
 	return &rec, nil
+}
+
+func (r *PushRepo) ApplyReceipt(ctx context.Context, recordID uint64, status domain.PushStatus, errMsg string, receipt *domain.PushReceipt) error {
+	if receipt == nil {
+		return fmt.Errorf("nil receipt")
+	}
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var rec domain.PushRecord
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", recordID).First(&rec).Error; err != nil {
+			return err
+		}
+		if rec.Status.CanTransitTo(status) && !(rec.Status == status && errMsg == "") {
+			updates := map[string]any{"status": status}
+			switch {
+			case status == domain.PushStatusFailed || status.IsSuppressedLike():
+				if errMsg != "" {
+					updates["error_msg"] = errMsg
+				}
+			case status.DeliveredOK():
+				updates["error_msg"] = errMsg
+			}
+			if err := tx.Model(&domain.PushRecord{}).Where("id = ?", recordID).Updates(updates).Error; err != nil {
+				return err
+			}
+		}
+		receipt.PushRecordID = recordID
+		return tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "push_record_id"}, {Name: "event"}},
+			DoNothing: true,
+		}).Create(receipt).Error
+	})
 }
 
 func (r *PushRepo) CreateReceipt(ctx context.Context, receipt *domain.PushReceipt) error {
 	if receipt == nil {
 		return fmt.Errorf("nil receipt")
 	}
-	var n int64
-	if err := r.db.WithContext(ctx).Model(&domain.PushReceipt{}).
-		Where("push_record_id = ? AND event = ?", receipt.PushRecordID, receipt.Event).
-		Count(&n).Error; err != nil {
-		return err
-	}
-	if n > 0 {
-		return nil
-	}
-	return r.db.WithContext(ctx).Create(receipt).Error
+	err := r.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "push_record_id"}, {Name: "event"}},
+		DoNothing: true,
+	}).Create(receipt).Error
+	return err
 }
 
 func (r *PushRepo) ListFailedUserIDs(ctx context.Context, mainTaskID uint64) ([]string, error) {
 	var ids []string
-	// 有失败流水、且该活动下无任何渠道成功投递的用户
+	// 有供应商失败流水、且该活动下无任何渠道成功投递的用户（抑制类不计入失败重推）
 	err := r.db.WithContext(ctx).Raw(`
 SELECT DISTINCT f.user_id
 FROM push_records f
@@ -655,6 +734,34 @@ WHERE main_task_id = ? AND status IN (?, ?, ?)
 		return out, err
 	}
 	out.FailUsers = int64(len(failed))
+
+	countExclusive := func(status domain.PushStatus) (int64, error) {
+		var n int64
+		err := r.db.WithContext(ctx).Raw(`
+SELECT COUNT(DISTINCT u.user_id) FROM push_records u
+WHERE u.main_task_id = ? AND u.status = ?
+  AND NOT EXISTS (
+    SELECT 1 FROM push_records s
+    WHERE s.main_task_id = u.main_task_id AND s.user_id = u.user_id
+      AND s.status IN (?, ?, ?, ?)
+  )
+`, mainTaskID, status,
+			domain.PushStatusSent, domain.PushStatusDelivered, domain.PushStatusClicked, domain.PushStatusFailed,
+		).Scan(&n).Error
+		return n, err
+	}
+	if out.SuppressedUsers, err = countExclusive(domain.PushStatusSuppressed); err != nil {
+		return out, err
+	}
+	if out.UnreachableUsers, err = countExclusive(domain.PushStatusUnreachable); err != nil {
+		return out, err
+	}
+	if out.ExpiredUsers, err = countExclusive(domain.PushStatusExpired); err != nil {
+		return out, err
+	}
+	if out.QuotaRejectedUsers, err = countExclusive(domain.PushStatusQuotaRejected); err != nil {
+		return out, err
+	}
 	return out, nil
 }
 
@@ -668,7 +775,10 @@ func (r *PushRepo) ClaimDelivery(ctx context.Context, rec *domain.PushRecord) (i
 	}
 	rec.Status = domain.PushStatusSending
 	rec.ErrorMsg = ""
-	rec.ProviderID = ""
+	rec.ProviderID = nil
+	if rec.Provider == "" {
+		rec.Provider = string(rec.Channel)
+	}
 
 	err = r.db.WithContext(ctx).Create(rec).Error
 	if err == nil {
@@ -697,6 +807,10 @@ func (r *PushRepo) ClaimDelivery(ctx context.Context, rec *domain.PushRecord) (i
 		domain.PushStatusFailed,
 		domain.PushStatusCancelled,
 		domain.PushStatusQueued,
+		domain.PushStatusSuppressed,
+		domain.PushStatusUnreachable,
+		domain.PushStatusExpired,
+		domain.PushStatusQuotaRejected,
 		domain.PushStatusSending, // 陈旧 sending 可抢占
 	}
 	res := r.db.WithContext(ctx).Model(&domain.PushRecord{}).
@@ -705,7 +819,8 @@ func (r *PushRepo) ClaimDelivery(ctx context.Context, rec *domain.PushRecord) (i
 			"sub_task_id": rec.SubTaskID,
 			"content":     rec.Content,
 			"status":      domain.PushStatusSending,
-			"provider_id": "",
+			"provider":    rec.Provider,
+			"provider_id": nil,
 			"error_msg":   "",
 			"sent_at":     nil,
 		})

@@ -1,12 +1,16 @@
 # Starlink 功能待办清单（TODO）
 
-基于当前代码与 README「已知限制」整理。按优先级推进；勾选表示已完成。
+更新日期：2026-08-05
 
-> 口径已落地：流水线终态按子任务入队；用户成功/失败与进度按 `push_records` 渠道结果（见 P1）。
+基于代码与 README「已知限制」整理。按优先级推进；勾选表示已完成。
+
+> **口径**：流水线终态按子任务入队；用户成功/失败与进度按 `push_records` 渠道结果（含 `suppressed` / `unreachable` 等抑制态分项）。
 
 ---
 
-## P0 · 可靠性（丢投 / 卡死）
+## 第一期（已完成）：可靠性与基础能力
+
+### P0 · 可靠性（丢投 / 卡死）
 
 - [x] **MQ PEL 自动重投**：`XAUTOCLAIM` / 读 pending、最大投递次数、死信队列（DLQ）；失败不 ACK 后可恢复消费
   - 实现：`internal/adapter/mq/redis_stream.go`；配置：`mq.redis_stream.*`
@@ -17,7 +21,7 @@
   - 注意：Redis `MAXLEN`/`XTRIM` 不感知 Consumer Group，上限过小可能裁掉仍在 PEL 的条目，请按积压水位留余量
 - [x] **Pusher 真并发**：为每条消息起受限 goroutine，在 worker 内 ACK；让 `worker_concurrency` / `high_worker_concurrency` 真正生效
   - `RedisStream.Consume` / `MemoryQueue.Consume`：`batch`=并发度，worker 池内 `handleMessage`（含 ACK/PEL/DLQ）
-  - `Consumer.Run` 将 concurrency 直接传给 `MQ.Consume`；渠道配额见 P3 `channel_quota`
+  - `Consumer.Run` 将 concurrency 直接传给 `MQ.Consume`；渠道配额见 `channel_quota`
 - [x] **拆分卡单恢复**：主任务 `pending→running` 后崩溃无子任务时，lease/心跳 + 扫描重入拆分
   - 字段：`main_tasks.split_owner` / `split_lease_at`；配置：`scheduler.split_lease_sec`（默认 90）
   - `MarkMainTaskRunning` 写租约；`Splitter` 每页 `RenewSplitLease`；结束 `ClearSplitLease`
@@ -26,9 +30,7 @@
   - `UpdateSubTaskResult(id, workerID, …)`：仅 `worker_id` 匹配且 `running|retrying` 时可写终态；`updated=false` 则不聚合
   - `TryMarkSubFinished`：Redis SET `starlink:task:{id}:sub_finished`；`SetSubDone`（重推对齐）时清空该集合
 
----
-
-## P1 · 状态与口径正确性
+### P1 · 状态与口径正确性
 
 - [x] **活动成功口径定义并落地**
   - **流水线终态**（`success` / `partial` / `failed`）：仍按子任务入队结果聚合（Redis `GetSubDone`）
@@ -41,9 +43,7 @@
 - [x] **进度与流水对齐**：`buildProgress` 有流水时以 `CountUserOutcomes` 为准
 - [x] **回执错误分类**：流水不存在 → 404；其它 DB 错误原样返回（不再一律 404）
 
----
-
-## P2 · 产品能力（接通已有 SPI / 字段）
+### P2 · 产品能力（接通已有 SPI / 字段）
 
 - [x] **真实人群 Provider**：`audience.http` HTTP 圈人优先注册；Demo 仅支持 `demo_scenes`（默认 `demo`/`dev`），不再兜底所有 `biz_scene`
 - [x] **真实渠道 Sender**：`pusher.channels.*.mode=http` 覆盖 stub；HTTP 状态映射 `Retryable`（5xx/429 可重试，4xx 不可）；内置 stub 支持 `Extra.force_fail`
@@ -57,24 +57,11 @@
 - [x] **扩展渠道类型**：`wecom` / `dingtalk`（Valid + stub Register）
 - [x] **RocketMQ 生产 Transport**：`-tags rocketmq` 启用官方客户端；`TryInitRocketTransport` 由 bootstrap 注入
 
----
+### P3 · 渠道配额（已完成）
 
-## P3 · 安全、运维与可观测
-
-- [ ] **API 鉴权授权**：创建/取消/暂停/重推/模板审核需认证；按租户或业务线授权
-- [ ] **回执接口鉴权与验签**：防伪造送达/点击
-- [ ] **Webhook 安全与可靠**：URL 白名单（防 SSRF）、签名、失败重试、outbox 持久化
 - [x] **渠道配额 / 分布式限流**：`channel_quota` 按 channel×priority 分桶（Redis/进程内）；`ErrChannelThrottled` 留 PEL；Scheduler 反压 pace；enforce 准入拒创；429 自适应缩 QPS；拆分后超容量 warn/pause
-- [ ] **独立 DB 迁移任务**：三进程不再并发 `AutoMigrate`；启动只做 schema 校验
-- [ ] **Readiness / 健康检查**：探测 MySQL、Redis、MQ，而非空 `/healthz`
-- [ ] **Prometheus 指标**：队列积压、PEL、发送成功率、限流拒绝、拆分耗时等
-- [ ] **链路追踪**：API → Scheduler → MQ → Pusher → 渠道，统一 trace/biz_id
-- [ ] **审计日志**：活动与模板关键操作落审计
-- [ ] **运维查询 API**：PEL/卡单查询、手工修复入口（替代纯 redis-cli）
 
----
-
-## P4 · 性能与工程债
+### P4 · 性能与工程债
 
 - [x] **主任务状态缓存**：Gateway `mainCache` TTL 300ms；单次 Handle 限流前后各刷新一次；doSend 仅 backoff 后强刷
 - [x] **拆分并行**：`scheduler.split_concurrency`（默认 2）信号量并发 `runSplit`
@@ -86,14 +73,100 @@
 
 ---
 
+## 第二期（已完成）：正确性补强
+
+一期完成后增量审查发现的逻辑风险，已全部修复。
+
+- [x] **补齐退订最终校验**
+  - Gateway 发送前按 `user_id + channel` 终检；营销（normal）Redis 失败 fail-closed 留 PEL，事务（high）fail-open；已退订记 `suppressed`
+- [x] **主任务状态查询失败时禁止继续发送**
+  - `loadMainSnap` 返回 error；`ErrMainStatusUnavailable` 计入 deferred requeue，不进 DLQ
+- [x] **回执幂等改为数据库原子约束**
+  - `(push_record_id, event)` 唯一索引 `uk_receipt_record_event` + `ON CONFLICT DO NOTHING`
+- [x] **回执状态更新与回执落库保持一致**
+  - `PushRepo.ApplyReceipt` 同事务完成状态机校验、流水更新与回执插入；主任务计数在事务后校准
+- [x] **消除 `provider_id` 回调歧义**
+  - `PushRecord.Provider` + `(provider, channel, provider_id)` 唯一键；回执入参支持 `provider`/`channel`；`GetRecordByProviderRef`
+- [x] **调整活动创建幂等检查顺序**
+  - 基础校验后优先查 `biz_id`；同一 `biz_id` 请求摘要不同返回 `40901 Conflict`
+- [x] **防止人群分页游标死循环**
+  - `advancePageToken` 校验 token 前进；限制最大页数 / 最大用户数 / 单页大小
+- [x] **保留用户级 `Extra`**
+  - 子任务 payload 存 `extras`；Worker `MergeExtra`（用户覆盖活动）；敏感字段加密属后续治理
+- [x] **限制 HTTP Provider/Sender 响应体大小**
+  - `io.LimitReader` 1MiB；限制 AudiencePage 用户数、变量数量和字段长度
+- [x] **细化被抑制消息状态**
+  - 新增 `suppressed` / `unreachable` / `expired` / `quota_rejected`；频控/退订→`suppressed`，渠道未注册→`unreachable`；进度接口分项统计
+
+---
+
+## 待办 · API 与运营能力
+
+- [ ] 活动列表与筛选：分页列表，支持按场景、状态、渠道、优先级、创建时间、计划时间和负责人筛选
+- [ ] 批量操作：批量暂停、恢复、取消、重推和结果导出
+- [ ] 活动预检（preflight）：创建前返回预计人群量、过滤量、渠道可达量、预计耗时、容量风险和费用估算
+- [ ] 人群试算接口：只统计人群或解析少量样本，不创建主任务、不发送消息
+- [ ] 测试发送与 dry-run：完成模板渲染和渠道配置校验，但不进入正式统计
+- [ ] 活动草稿与复制：支持草稿、复制、开始前编辑和重新排期
+- [ ] 投递漏斗：原始人群 → AB 抽样 → 黑名单/退订 → 不可达 → 入队 → 发送 → 送达 → 点击
+- [ ] 失败分析：按渠道、供应商错误码、是否可重试和时间段汇总
+- [ ] 结果明细与异步导出：提供用户级流水查询，大结果集导出到对象存储
+- [ ] DLQ / PEL 运维 API：查询、查看错误、单条/批量重投和丢弃；人工操作写审计日志（替代纯 redis-cli）
+
+---
+
+## 待办 · 模板与投放能力
+
+- [ ] 多渠道模板内容：同一模板为 App Push、短信、邮件等分别维护标题、正文和扩展字段
+- [ ] 模板变量 Schema：声明必填变量、类型、默认值、示例值和敏感等级，创建活动时提前校验
+- [ ] 模板预览与测试渲染：明确缺失变量策略（报错、保留或默认值）
+- [ ] 模板版本历史与回滚：保存变更版本、审核记录、差异和回滚入口
+- [ ] 多语言与地区版本：按用户 locale 选择模板，支持默认语言回退
+- [ ] 用户时区投放：静默时段和发送窗口按用户时区执行
+- [ ] 实验平台化：增加 `experiment_id`、对照组、分层比例和结果指标；抽样哈希加入实验或活动盐值并持久化分组
+- [ ] 活动过期时间：增加 `expire_at`，超时队列消息标记为 `expired`，不再调用渠道
+- [ ] 发送策略扩展：支持所有渠道均成功、条件路由、成本优先和最大降级次数
+
+---
+
+## 待办 · 多租户、安全与平台化
+
+- [ ] **API 鉴权授权**：创建/取消/暂停/重推/模板审核需认证；按租户或业务线授权
+- [ ] **多租户数据模型**：活动、模板、流水和配置增加 `tenant_id/app_id`；`biz_id` 改为租户内唯一
+- [ ] **RBAC 与审批策略**：区分创建、审核、发送、取消、运维和审计权限；大人群活动支持多级审批
+- [ ] **回执接口鉴权与验签**：防伪造送达/点击；校验时间戳、nonce 和请求摘要
+- [ ] **密钥与凭据管理**：Audience/Channel HTTP 支持 API Key、OAuth/mTLS，敏感配置从 Secret Manager 或环境变量注入
+- [ ] **Webhook 安全与可靠**：URL 白名单（防 SSRF）、签名、失败重试；终态事件 outbox 落库，独立 Worker 重试/死信/手工重放
+- [ ] **服务端 HTTP 防护**：ReadHeader/Read/Write/Idle 超时、请求体上限、并发限制和严格 JSON
+- [ ] **上游调用韧性**：Audience、Channel、Webhook 增加熔断、重试预算、连接池和请求指标
+- [ ] **独立 DB 迁移**：提供 `cmd/migrate`；三进程不再并发 `AutoMigrate`，业务进程只检查 schema 版本
+- [ ] **Readiness / Liveness 分离**：Readiness 检查 MySQL、Redis、所选 MQ 与必要配置（替代空 `/healthz`）
+- [ ] **可观测性**：Prometheus（队列积压、PEL、发送成功率、限流拒绝、拆分耗时等）+ OpenTelemetry；结构化日志关联 `trace_id/biz_id/task_id/msg_id`
+- [ ] **审计日志**：保存操作者、租户、请求摘要、前后状态、时间和来源 IP
+
+---
+
+## 待办 · 数据治理与工程质量
+
+- [ ] 数据保留与归档：为流水、回执、DLQ 和任务配置 TTL/归档周期
+- [ ] 隐私保护：用户标识和联系方式脱敏或加密；提供按用户查询与删除能力（含用户级 Extra 敏感字段）
+- [ ] 数据库索引评审：按活动列表、流水、回执和归档查询补复合索引并执行 `EXPLAIN`
+- [ ] 集成测试：使用真实 MySQL/Redis 验证并发幂等、租约、PEL、DLQ、回执事务和重推
+- [ ] 端到端与故障注入：覆盖完整链路，并模拟进程退出、Redis/MySQL 短暂故障
+- [ ] 竞态与模糊测试：CI 增加 `go test -race ./...` 和模板、JSON、频控、时窗 fuzz test
+- [ ] 基准与容量测试：建立拆分、MQ、数据库、聚合和渠道限流基准
+- [ ] 固定 Go 工具链：项目要求 Go 1.22+；在 CI、开发容器或版本管理文件中固定版本
+
+---
+
 ## 建议迭代顺序
 
-1. P0：~~PEL 重投 + DLQ~~、~~Stream 容量治理~~、~~Pusher 真并发~~、~~拆分卡单恢复~~（已完成）  
-2. P0：（P3）~~限流隔离 / 分布式限流~~（已完成：`channel_quota`）  
-3. P1：~~口径 / 聚合 CAS / `PatchMainMeta` / 重推 / 回执状态机 / 进度对齐~~（已完成）  
-4. P2：~~人群/渠道 SPI、可达渠道、频控、Title/Payload、default_channel、合规 Filter、模板 CAS、分时窗/AB、企微钉钉、RocketMQ Transport~~（已完成）  
-6. P4：~~主任务状态缓存 / 拆分并行+流式落库 / 单测 / 错误规范化 / 工程清理 / Compose 解耦~~（已完成）  
-7. P3：鉴权、Webhook、指标、独立迁移（可与运维项并行）  
+1. ~~第一期 P0～P4（可靠性、口径、SPI、配额、工程债）~~ ✅
+2. ~~第二期正确性补强（退订终检、状态 fail-closed、回执事务/唯一键、provider 消歧、幂等顺序、分页保护、Extra、HTTP 限制、抑制态）~~ ✅
+3. API 与运营：活动列表、预检、测试发送、投递漏斗、DLQ 运维 API
+4. 安全与平台：鉴权、回执验签、Webhook outbox、独立迁移、Readiness、指标
+5. 模板与投放：多渠道模板、版本历史、多语言、用户时区、实验平台
+6. 多租户、数据归档、隐私治理、集成/E2E/容量测试
 
 ---
 
@@ -110,4 +183,4 @@
 
 ---
 
-*新增能力请同步在本文件追加勾选框；完成项打勾并在 PR 中引用对应条目。*
+*新增能力请同步在本文件追加勾选框；完成项打勾并在 PR 中引用对应条目。本文件已合并原根目录 `TODO_V2.md`。*

@@ -194,6 +194,16 @@ func (p *HTTPProvider) Supports(bizScene string) bool {
 	return ok
 }
 
+const (
+	// maxHTTPResponseBytes HTTP Provider/Sender 响应体上限，防止异常上游撑爆内存
+	maxHTTPResponseBytes = 1 << 20 // 1 MiB
+	maxAudiencePageUsers = 2000
+	maxUserVars          = 64
+	maxVarKeyLen         = 64
+	maxVarValLen         = 1024
+	maxUserIDLen         = 128
+)
+
 func (p *HTTPProvider) Resolve(ctx context.Context, query domain.AudienceQuery) (*domain.AudiencePage, error) {
 	raw, err := json.Marshal(query)
 	if err != nil {
@@ -209,9 +219,12 @@ func (p *HTTPProvider) Resolve(ctx context.Context, query domain.AudienceQuery) 
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxHTTPResponseBytes+1))
 	if err != nil {
 		return nil, err
+	}
+	if len(body) > maxHTTPResponseBytes {
+		return nil, fmt.Errorf("audience http response too large (>%d bytes)", maxHTTPResponseBytes)
 	}
 	if resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("audience http %d: %s", resp.StatusCode, truncate(string(body), 200))
@@ -220,7 +233,43 @@ func (p *HTTPProvider) Resolve(ctx context.Context, query domain.AudienceQuery) 
 	if err := json.Unmarshal(body, &page); err != nil {
 		return nil, err
 	}
+	sanitizeAudiencePage(&page)
 	return &page, nil
+}
+
+func sanitizeAudiencePage(page *domain.AudiencePage) {
+	if page == nil {
+		return
+	}
+	if len(page.Users) > maxAudiencePageUsers {
+		page.Users = page.Users[:maxAudiencePageUsers]
+	}
+	for i := range page.Users {
+		u := &page.Users[i]
+		if len(u.UserID) > maxUserIDLen {
+			u.UserID = u.UserID[:maxUserIDLen]
+		}
+		if len(u.Vars) == 0 {
+			continue
+		}
+		trimmed := make(map[string]string, maxUserVars)
+		n := 0
+		for k, v := range u.Vars {
+			if n >= maxUserVars {
+				break
+			}
+			trimmed[clampStr(k, maxVarKeyLen)] = clampStr(v, maxVarValLen)
+			n++
+		}
+		u.Vars = trimmed
+	}
+}
+
+func clampStr(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
 }
 
 func truncate(s string, n int) string {
@@ -285,6 +334,14 @@ func NewUnsubscribeFilter(rdb *redis.Client, prefix string) *UnsubscribeFilter {
 	return &UnsubscribeFilter{rdb: rdb, prefix: prefix}
 }
 
+// IsUnsubscribed 供 Gateway 发送前终检；实现 port.UnsubscribeChecker。
+func (f *UnsubscribeFilter) IsUnsubscribed(ctx context.Context, userID string, channel domain.ChannelType) (bool, error) {
+	if f.rdb == nil || f.prefix == "" || userID == "" || channel == "" {
+		return false, nil
+	}
+	return f.rdb.SIsMember(ctx, f.prefix+string(channel), userID).Result()
+}
+
 func (f *UnsubscribeFilter) Filter(ctx context.Context, bizScene string, users []domain.TargetUser) ([]domain.TargetUser, error) {
 	if f.rdb == nil || f.prefix == "" || len(users) == 0 {
 		return users, nil
@@ -297,7 +354,7 @@ func (f *UnsubscribeFilter) Filter(ctx context.Context, bizScene string, users [
 		}
 		kept := make([]domain.ChannelType, 0, len(u.Channels))
 		for _, ch := range u.Channels {
-			ok, err := f.rdb.SIsMember(ctx, f.prefix+string(ch), u.UserID).Result()
+			ok, err := f.IsUnsubscribed(ctx, u.UserID, ch)
 			if err != nil {
 				return nil, err
 			}

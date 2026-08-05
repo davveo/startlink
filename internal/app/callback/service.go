@@ -23,12 +23,18 @@ func NewService(pushRepo port.PushRepository, tasks port.TaskRepository) *Servic
 
 type ReceiptInput struct {
 	ProviderID string              `json:"provider_id" binding:"required"`
+	Provider   string              `json:"provider"` // 供应商标识；建议与 channel 一并传入
+	Channel    domain.ChannelType  `json:"channel"`  // 渠道；与 provider 共同消歧
 	Event      domain.ReceiptEvent `json:"event" binding:"required"`
 	RawPayload string              `json:"raw_payload"`
 }
 
 func (s *Service) Handle(ctx context.Context, in ReceiptInput) error {
-	rec, err := s.pushRepo.GetRecordByProviderID(ctx, in.ProviderID)
+	provider := in.Provider
+	if provider == "" && in.Channel != "" {
+		provider = string(in.Channel)
+	}
+	rec, err := s.pushRepo.GetRecordByProviderRef(ctx, provider, in.Channel, in.ProviderID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return errcode.NotFound
@@ -56,10 +62,6 @@ func (s *Service) Handle(ctx context.Context, in ReceiptInput) error {
 		}
 	}
 
-	if err := s.pushRepo.UpdateRecordStatus(ctx, rec.ID, status, "", errMsg); err != nil {
-		return err
-	}
-
 	receipt := &domain.PushReceipt{
 		PushRecordID: rec.ID,
 		MainTaskID:   rec.MainTaskID,
@@ -70,11 +72,11 @@ func (s *Service) Handle(ctx context.Context, in ReceiptInput) error {
 		RawPayload:   in.RawPayload,
 		CreatedAt:    time.Now(),
 	}
-	if err := s.pushRepo.CreateReceipt(ctx, receipt); err != nil {
+	if err := s.pushRepo.ApplyReceipt(ctx, rec.ID, status, errMsg, receipt); err != nil {
 		return err
 	}
 
-	// 回执后按渠道口径校准主任务用户成功/失败数
+	// 回执事务后再异步校准主任务用户成功/失败数
 	if s.tasks != nil {
 		oc, err := s.pushRepo.CountUserOutcomes(ctx, rec.MainTaskID)
 		if err == nil && oc.HasRecords {

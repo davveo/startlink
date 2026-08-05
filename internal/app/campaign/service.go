@@ -103,11 +103,15 @@ type ProgressView struct {
 	Priority    domain.Priority      `json:"priority"`
 	Status      domain.TaskStatus    `json:"status"`
 
-	TotalUsers      int64 `json:"total_users"`
-	SuccessUsers    int64 `json:"success_users"`
-	FailUsers       int64 `json:"fail_users"`
-	CancelledUsers  int64 `json:"cancelled_users"`
-	InProgressUsers int64 `json:"in_progress_users"`
+	TotalUsers         int64 `json:"total_users"`
+	SuccessUsers       int64 `json:"success_users"`
+	FailUsers          int64 `json:"fail_users"`
+	SuppressedUsers    int64 `json:"suppressed_users"`
+	UnreachableUsers   int64 `json:"unreachable_users"`
+	ExpiredUsers       int64 `json:"expired_users"`
+	QuotaRejectedUsers int64 `json:"quota_rejected_users"`
+	CancelledUsers     int64 `json:"cancelled_users"`
+	InProgressUsers    int64 `json:"in_progress_users"`
 
 	SubTaskTotal  int `json:"sub_task_total"`
 	SubTaskDone   int `json:"sub_task_done"`
@@ -149,6 +153,18 @@ func (s *Service) Create(ctx context.Context, in domain.CreateCampaignInput) (*C
 		return nil, errcode.Internal
 	}
 
+	// 基础校验后优先查幂等：模板后续停用不影响同一 biz_id 重试
+	exist, err := s.tasks.GetMainTaskByBizID(ctx, in.BizID)
+	if err == nil && exist != nil {
+		if !campaignRequestMatches(exist, in, primary, chList, mode) {
+			return nil, errcode.Conflict
+		}
+		return &CreateResult{TaskID: exist.ID, BizID: exist.BizID, Status: exist.Status}, nil
+	}
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+
 	tpl, err := s.templates.GetByCode(ctx, in.TemplateID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -158,14 +174,6 @@ func (s *Service) Create(ctx context.Context, in domain.CreateCampaignInput) (*C
 	}
 	if !tpl.Status.Usable() {
 		return nil, errcode.TemplateNotUsable
-	}
-
-	exist, err := s.tasks.GetMainTaskByBizID(ctx, in.BizID)
-	if err == nil && exist != nil {
-		return &CreateResult{TaskID: exist.ID, BizID: exist.BizID, Status: exist.Status}, nil
-	}
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, err
 	}
 
 	prio := domain.ResolvePriority(in.Priority, in.BizScene, s.highBizScenes)
@@ -201,11 +209,44 @@ func (s *Service) Create(ctx context.Context, in domain.CreateCampaignInput) (*C
 	if err := s.tasks.CreateMainTask(ctx, task); err != nil {
 		// 并发创建同一 biz_id：回查已有任务（唯一索引兜底）
 		if exist2, e2 := s.tasks.GetMainTaskByBizID(ctx, in.BizID); e2 == nil && exist2 != nil {
+			if !campaignRequestMatches(exist2, in, primary, chList, mode) {
+				return nil, errcode.Conflict
+			}
 			return &CreateResult{TaskID: exist2.ID, BizID: exist2.BizID, Status: exist2.Status}, nil
 		}
 		return nil, err
 	}
 	return &CreateResult{TaskID: task.ID, BizID: task.BizID, Status: task.Status}, nil
+}
+
+// campaignRequestMatches 同一 biz_id 的幂等重试须请求摘要一致，否则 Conflict。
+func campaignRequestMatches(exist *domain.MainTask, in domain.CreateCampaignInput, primary domain.ChannelType, chList []domain.ChannelType, mode domain.ChannelMode) bool {
+	if exist.BizScene != in.BizScene || exist.Title != in.Title ||
+		exist.TemplateID != in.TemplateID || exist.AudienceRef != in.AudienceRef {
+		return false
+	}
+	if exist.Channel != primary || !channelListsEqual(exist.ChannelList(), chList) {
+		return false
+	}
+	wantMode := mode.Normalize()
+	if len(chList) <= 1 {
+		wantMode = domain.ChannelModeSingle
+	} else if wantMode == domain.ChannelModeSingle {
+		wantMode = domain.ChannelModeFallback
+	}
+	return exist.EffectiveChannelMode() == wantMode
+}
+
+func channelListsEqual(a, b []domain.ChannelType) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // checkQuotaAdmission 对 admission=enforce 的渠道做创建准入（三期）
@@ -379,7 +420,8 @@ func (s *Service) buildProgress(ctx context.Context, task *domain.MainTask) (*Pr
 		}
 	}
 
-	// 用户成功/失败以 push_records 渠道口径为准
+	// 用户成功/失败/抑制以 push_records 渠道口径为准
+	var suppressedUsers, unreachableUsers, expiredUsers, quotaRejectedUsers int64
 	if s.pushRepo != nil {
 		oc, err := s.pushRepo.CountUserOutcomes(ctx, task.ID)
 		if err != nil {
@@ -388,6 +430,10 @@ func (s *Service) buildProgress(ctx context.Context, task *domain.MainTask) (*Pr
 		if oc.HasRecords {
 			successUsers = oc.SuccessUsers
 			failUsers = oc.FailUsers
+			suppressedUsers = oc.SuppressedUsers
+			unreachableUsers = oc.UnreachableUsers
+			expiredUsers = oc.ExpiredUsers
+			quotaRejectedUsers = oc.QuotaRejectedUsers
 		}
 	} else {
 		if successUsers == 0 && task.SuccessCount > 0 {
@@ -397,13 +443,14 @@ func (s *Service) buildProgress(ctx context.Context, task *domain.MainTask) (*Pr
 			failUsers = task.FailCount
 		}
 	}
+	settledExtra := suppressedUsers + unreachableUsers + expiredUsers + quotaRejectedUsers
 	if view.TotalUsers == 0 {
-		view.TotalUsers = successUsers + failUsers + cancelledUsers + inProgressUsers
+		view.TotalUsers = successUsers + failUsers + cancelledUsers + inProgressUsers + settledExtra
 	}
 
 	if task.TotalCount > 0 {
 		view.TotalUsers = task.TotalCount
-		finished := successUsers + failUsers + cancelledUsers
+		finished := successUsers + failUsers + cancelledUsers + settledExtra
 		if finished > task.TotalCount {
 			finished = task.TotalCount
 		}
@@ -414,7 +461,7 @@ func (s *Service) buildProgress(ctx context.Context, task *domain.MainTask) (*Pr
 		if task.Status.IsTerminal() {
 			inProgressUsers = 0
 			if cancelledUsers == 0 && task.Status == domain.TaskStatusCancelled {
-				cancelledUsers = task.TotalCount - successUsers - failUsers
+				cancelledUsers = task.TotalCount - successUsers - failUsers - settledExtra
 				if cancelledUsers < 0 {
 					cancelledUsers = 0
 				}
@@ -424,6 +471,10 @@ func (s *Service) buildProgress(ctx context.Context, task *domain.MainTask) (*Pr
 
 	view.SuccessUsers = successUsers
 	view.FailUsers = failUsers
+	view.SuppressedUsers = suppressedUsers
+	view.UnreachableUsers = unreachableUsers
+	view.ExpiredUsers = expiredUsers
+	view.QuotaRejectedUsers = quotaRejectedUsers
 	view.CancelledUsers = cancelledUsers
 	view.InProgressUsers = inProgressUsers
 	view.SubPending = subPending
@@ -436,7 +487,7 @@ func (s *Service) buildProgress(ctx context.Context, task *domain.MainTask) (*Pr
 	view.ProgressPercent, view.ProgressText = calcProgress(
 		task.Status,
 		view.TotalUsers,
-		successUsers+failUsers+cancelledUsers,
+		successUsers+failUsers+cancelledUsers+settledExtra,
 		task.SubTaskTotal,
 		task.SubTaskDone,
 	)

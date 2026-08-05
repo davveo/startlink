@@ -111,23 +111,38 @@ type TaskRepository interface {
 
 // UserPushOutcomes 按 push_records 汇总的用户级渠道口径
 type UserPushOutcomes struct {
-	SuccessUsers int64 // 任一渠道 sent/delivered/clicked 的去重用户数
-	FailUsers    int64 // 有失败且无任何渠道成功的去重用户数
-	HasRecords   bool  // 是否已有流水
+	SuccessUsers       int64 // 任一渠道 sent/delivered/clicked 的去重用户数
+	FailUsers          int64 // 有供应商失败且无任何渠道成功的去重用户数
+	SuppressedUsers    int64 // 仅被抑制（频控/退订等）且无成功/失败渠道的用户
+	UnreachableUsers   int64
+	ExpiredUsers       int64
+	QuotaRejectedUsers int64
+	HasRecords         bool // 是否已有流水
 }
 
 // PushRepository 推送流水与回执
 type PushRepository interface {
 	UpdateRecordStatus(ctx context.Context, id uint64, status domain.PushStatus, providerID, errMsg string) error
-	GetRecordByProviderID(ctx context.Context, providerID string) (*domain.PushRecord, error)
+	// UpdateRecordDelivery 发送成功后写入 provider + provider_id + status
+	UpdateRecordDelivery(ctx context.Context, id uint64, status domain.PushStatus, provider, providerID, errMsg string) error
+	// GetRecordByProviderRef 按供应商三元组定位流水
+	GetRecordByProviderRef(ctx context.Context, provider string, channel domain.ChannelType, providerID string) (*domain.PushRecord, error)
+	// ApplyReceipt 同一事务内完成状态机校验、流水更新与回执插入（冲突忽略）
+	ApplyReceipt(ctx context.Context, recordID uint64, status domain.PushStatus, errMsg string, receipt *domain.PushReceipt) error
 	CreateReceipt(ctx context.Context, receipt *domain.PushReceipt) error
-	// ListFailedUserIDs 查询主任务下「无任何渠道成功」且存在失败流水的用户
+	// ListFailedUserIDs 查询主任务下「无任何渠道成功」且存在供应商失败流水的用户
 	ListFailedUserIDs(ctx context.Context, mainTaskID uint64) ([]string, error)
-	// CountUserOutcomes 用户级成功/失败口径（以渠道结果为准）
+	// CountUserOutcomes 用户级成功/失败/抑制口径（以渠道结果为准）
 	CountUserOutcomes(ctx context.Context, mainTaskID uint64) (UserPushOutcomes, error)
 	// ClaimDelivery 按 (main_task, user, channel) 占位；duplicate=true 表示已成功投递应跳过
 	// inFlight=true 表示另一 worker 正在发送，调用方宜稍后重试
 	ClaimDelivery(ctx context.Context, rec *domain.PushRecord) (id uint64, duplicate, inFlight bool, err error)
+}
+
+// UnsubscribeChecker 发送前按 user+channel 终检退订
+type UnsubscribeChecker interface {
+	// IsUnsubscribed 返回是否已退订；Redis 不可用时应返回 error（由调用方决定 fail-open/closed）
+	IsUnsubscribed(ctx context.Context, userID string, channel domain.ChannelType) (bool, error)
 }
 
 // AggregatorCache 子任务终态计数 / 频控 / 投递去重（Redis）

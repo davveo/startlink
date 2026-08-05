@@ -58,13 +58,17 @@ func (s TaskStatus) IsRetryable() bool {
 type PushStatus string
 
 const (
-	PushStatusQueued    PushStatus = "queued"
-	PushStatusSending   PushStatus = "sending"
-	PushStatusSent      PushStatus = "sent"
-	PushStatusDelivered PushStatus = "delivered"
-	PushStatusClicked   PushStatus = "clicked"
-	PushStatusFailed    PushStatus = "failed"
-	PushStatusCancelled PushStatus = "cancelled" // 因主任务取消而跳过
+	PushStatusQueued        PushStatus = "queued"
+	PushStatusSending       PushStatus = "sending"
+	PushStatusSent          PushStatus = "sent"
+	PushStatusDelivered     PushStatus = "delivered"
+	PushStatusClicked       PushStatus = "clicked"
+	PushStatusFailed        PushStatus = "failed"
+	PushStatusCancelled     PushStatus = "cancelled"      // 因主任务取消而跳过
+	PushStatusSuppressed    PushStatus = "suppressed"     // 频控 / 退订 / 黑名单等合规抑制
+	PushStatusUnreachable   PushStatus = "unreachable"    // 无可达渠道或渠道未注册
+	PushStatusExpired       PushStatus = "expired"        // 活动或消息过期
+	PushStatusQuotaRejected PushStatus = "quota_rejected" // 配额硬拒（非限流等待）
 )
 
 // DeliveredOK 是否已成功投递（去重终态）
@@ -77,10 +81,21 @@ func (s PushStatus) DeliveredOK() bool {
 	}
 }
 
-// Reclaimable 失败/取消/排队态可被失败重推或 MQ 重试重新占位
+// IsSuppressedLike 被抑制类终态（非供应商失败，一般不计入 fail_users）
+func (s PushStatus) IsSuppressedLike() bool {
+	switch s {
+	case PushStatusSuppressed, PushStatusUnreachable, PushStatusExpired, PushStatusQuotaRejected:
+		return true
+	default:
+		return false
+	}
+}
+
+// Reclaimable 失败/取消/排队/抑制态可被失败重推或 MQ 重试重新占位
 func (s PushStatus) Reclaimable() bool {
 	switch s {
-	case PushStatusFailed, PushStatusCancelled, PushStatusQueued:
+	case PushStatusFailed, PushStatusCancelled, PushStatusQueued,
+		PushStatusSuppressed, PushStatusUnreachable, PushStatusExpired, PushStatusQuotaRejected:
 		return true
 	default:
 		return false
@@ -88,23 +103,27 @@ func (s PushStatus) Reclaimable() bool {
 }
 
 // CanTransitTo 流水状态单向前进（含幂等同态与占位回收）。
-// queued → sending → sent → delivered → clicked；失败/取消可回到 sending/queued 以重投。
+// queued → sending → sent → delivered → clicked；失败/取消/抑制可回到 sending/queued 以重投。
 func (from PushStatus) CanTransitTo(to PushStatus) bool {
 	if from == to {
 		return true
 	}
+	softTerminal := to == PushStatusFailed || to == PushStatusCancelled ||
+		to == PushStatusSuppressed || to == PushStatusUnreachable ||
+		to == PushStatusExpired || to == PushStatusQuotaRejected
 	switch from {
 	case PushStatusQueued:
-		return to == PushStatusSending || to == PushStatusFailed || to == PushStatusCancelled
+		return to == PushStatusSending || softTerminal
 	case PushStatusSending:
-		return to == PushStatusSent || to == PushStatusFailed || to == PushStatusCancelled || to == PushStatusQueued
+		return to == PushStatusSent || to == PushStatusQueued || softTerminal
 	case PushStatusSent:
 		return to == PushStatusDelivered || to == PushStatusClicked || to == PushStatusFailed
 	case PushStatusDelivered:
 		return to == PushStatusClicked || to == PushStatusFailed
 	case PushStatusClicked:
 		return false
-	case PushStatusFailed, PushStatusCancelled:
+	case PushStatusFailed, PushStatusCancelled,
+		PushStatusSuppressed, PushStatusUnreachable, PushStatusExpired, PushStatusQuotaRejected:
 		return to == PushStatusSending || to == PushStatusQueued
 	default:
 		return false

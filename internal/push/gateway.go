@@ -23,12 +23,13 @@ type mainCacheEntry struct {
 	expiresAt time.Time
 }
 
-// Gateway 推送网关：渠道路由 + 模板渲染 + 限流 + 频控 + 重试 + 多渠道降级/并行 + 投递去重
+// Gateway 推送网关：渠道路由 + 模板渲染 + 限流 + 频控 + 退订终检 + 重试 + 多渠道降级/并行 + 投递去重
 type Gateway struct {
 	channels   *channel.Registry
 	cache      port.AggregatorCache
 	pushRepo   port.PushRepository
 	tasks      port.TaskRepository
+	unsub      port.UnsubscribeChecker
 	limiter    port.ChannelLimiter
 	rateQPS    int
 	maxRetry   int
@@ -50,6 +51,7 @@ func NewGateway(
 	limiter port.ChannelLimiter,
 	rateQPS, maxRetry, dedupTTLSec int,
 	freq config.FreqConfig,
+	unsub port.UnsubscribeChecker,
 ) *Gateway {
 	if dedupTTLSec <= 0 {
 		dedupTTLSec = 7 * 24 * 3600
@@ -62,6 +64,7 @@ func NewGateway(
 		cache:      cache,
 		pushRepo:   pushRepo,
 		tasks:      tasks,
+		unsub:      unsub,
 		limiter:    limiter,
 		rateQPS:    rateQPS,
 		maxRetry:   maxRetry,
@@ -115,9 +118,10 @@ func (g *Gateway) waitToken(ctx context.Context, ch domain.ChannelType, prio dom
 }
 
 // loadMainSnap 短 TTL 缓存主任务状态/时窗，显著减少热路径 GetMainTask。
-func (g *Gateway) loadMainSnap(ctx context.Context, mainTaskID uint64, force bool) (domain.TaskStatus, []domain.SendWindow) {
+// 数据库异常时返回 error，调用方必须 fail-closed（禁止继续发送）。
+func (g *Gateway) loadMainSnap(ctx context.Context, mainTaskID uint64, force bool) (domain.TaskStatus, []domain.SendWindow, error) {
 	if g.tasks == nil {
-		return "", nil
+		return "", nil, nil
 	}
 	now := time.Now()
 	if !force {
@@ -125,13 +129,16 @@ func (g *Gateway) loadMainSnap(ctx context.Context, mainTaskID uint64, force boo
 		if e, ok := g.mainCache[mainTaskID]; ok && now.Before(e.expiresAt) {
 			st, w := e.status, e.windows
 			g.mainMu.Unlock()
-			return st, w
+			return st, w, nil
 		}
 		g.mainMu.Unlock()
 	}
 	main, err := g.tasks.GetMainTask(ctx, mainTaskID)
-	if err != nil || main == nil {
-		return "", nil
+	if err != nil {
+		return "", nil, fmt.Errorf("%w: %v", domain.ErrMainStatusUnavailable, err)
+	}
+	if main == nil {
+		return "", nil, domain.ErrMainStatusUnavailable
 	}
 	entry := mainCacheEntry{
 		status:    main.Status,
@@ -141,7 +148,7 @@ func (g *Gateway) loadMainSnap(ctx context.Context, mainTaskID uint64, force boo
 	g.mainMu.Lock()
 	g.mainCache[mainTaskID] = entry
 	g.mainMu.Unlock()
-	return entry.status, entry.windows
+	return entry.status, entry.windows, nil
 }
 
 func (g *Gateway) InvalidateMainCache(mainTaskID uint64) {
@@ -151,7 +158,10 @@ func (g *Gateway) InvalidateMainCache(mainTaskID uint64) {
 }
 
 func (g *Gateway) Handle(ctx context.Context, msg domain.PushMessage) error {
-	st, windows := g.loadMainSnap(ctx, msg.MainTaskID, false)
+	st, windows, err := g.loadMainSnap(ctx, msg.MainTaskID, false)
+	if err != nil {
+		return err
+	}
 	if st == domain.TaskStatusCancelled {
 		slog.Info("skip push: main task cancelled", "main_task_id", msg.MainTaskID, "user", msg.UserID)
 		_ = g.markCancelled(ctx, msg, msg.Channel, msg.Body)
@@ -183,6 +193,9 @@ func (g *Gateway) Handle(ctx context.Context, msg domain.PushMessage) error {
 	default:
 		ok, err := g.sendOne(ctx, msg, chs[0], content, true)
 		if ok {
+			return nil
+		}
+		if errors.Is(err, errSuppressed) {
 			return nil
 		}
 		return err
@@ -240,6 +253,27 @@ func (g *Gateway) allowFreq(ctx context.Context, msg domain.PushMessage, ch doma
 	return true, ""
 }
 
+// checkUnsubscribed 发送前按 user+channel 终检。
+// 已退订 → suppressed；Redis 不可用时营销消息 fail-closed（返回 error 留 PEL），事务消息 fail-open。
+func (g *Gateway) checkUnsubscribed(ctx context.Context, msg domain.PushMessage, ch domain.ChannelType) error {
+	if g.unsub == nil {
+		return nil
+	}
+	ok, err := g.unsub.IsUnsubscribed(ctx, msg.UserID, ch)
+	if err != nil {
+		if msg.Priority.Normalize() == domain.PriorityHigh {
+			slog.Warn("unsubscribe check failed, fail-open for high priority",
+				"user", msg.UserID, "channel", ch, "err", err)
+			return nil
+		}
+		return fmt.Errorf("unsubscribe check: %w", err)
+	}
+	if ok {
+		return domain.ErrUnsubscribed
+	}
+	return nil
+}
+
 func (g *Gateway) markCancelled(ctx context.Context, msg domain.PushMessage, ch domain.ChannelType, content string) error {
 	if g.pushRepo == nil {
 		return nil
@@ -249,6 +283,7 @@ func (g *Gateway) markCancelled(ctx context.Context, msg domain.PushMessage, ch 
 		SubTaskID:  msg.SubTaskID,
 		UserID:     msg.UserID,
 		Channel:    ch,
+		Provider:   string(ch),
 		Content:    content,
 	})
 	if err != nil {
@@ -261,7 +296,10 @@ func (g *Gateway) markCancelled(ctx context.Context, msg domain.PushMessage, ch 
 }
 
 func (g *Gateway) checkMainGate(ctx context.Context, mainTaskID uint64, force bool) error {
-	st, _ := g.loadMainSnap(ctx, mainTaskID, force)
+	st, _, err := g.loadMainSnap(ctx, mainTaskID, force)
+	if err != nil {
+		return err
+	}
 	if st == domain.TaskStatusCancelled {
 		return errMainCancelled
 	}
@@ -271,11 +309,15 @@ func (g *Gateway) checkMainGate(ctx context.Context, mainTaskID uint64, force bo
 	return nil
 }
 
-var errMainCancelled = errors.New("main task cancelled")
+var (
+	errMainCancelled = errors.New("main task cancelled")
+	errSuppressed    = errors.New("message suppressed")
+)
 
 // sendFallback 按配置顺序依次降级：前一渠道失败才尝试下一渠道，成功即停
 func (g *Gateway) sendFallback(ctx context.Context, msg domain.PushMessage, chs []domain.ChannelType, content string) error {
 	var lastErr error
+	anySuppressed := false
 	for i, ch := range chs {
 		if err := g.checkMainGate(ctx, msg.MainTaskID, i > 0); err != nil {
 			if errors.Is(err, errMainCancelled) {
@@ -292,10 +334,15 @@ func (g *Gateway) sendFallback(ctx context.Context, msg domain.PushMessage, chs 
 			}
 			return nil
 		}
+		if errors.Is(err, errSuppressed) {
+			anySuppressed = true
+			continue
+		}
 		if errors.Is(err, domain.ErrMainTaskPaused) ||
 			errors.Is(err, domain.ErrOutsideSendWindow) ||
 			errors.Is(err, domain.ErrQuietHours) ||
-			errors.Is(err, domain.ErrChannelThrottled) {
+			errors.Is(err, domain.ErrChannelThrottled) ||
+			errors.Is(err, domain.ErrMainStatusUnavailable) {
 			return err
 		}
 		if err == nil {
@@ -306,6 +353,9 @@ func (g *Gateway) sendFallback(ctx context.Context, msg domain.PushMessage, chs 
 	}
 	if lastErr != nil {
 		return lastErr
+	}
+	if anySuppressed {
+		return nil
 	}
 	return fmt.Errorf("all channels failed")
 }
@@ -331,14 +381,20 @@ func (g *Gateway) sendParallel(ctx context.Context, msg domain.PushMessage, chs 
 	close(ch)
 
 	anyOK := false
+	anySuppressed := false
 	var lastErr error
 	for o := range ch {
 		if o.ok {
 			anyOK = true
 			continue
 		}
+		if errors.Is(o.err, errSuppressed) {
+			anySuppressed = true
+			continue
+		}
 		if o.err != nil {
 			if errors.Is(o.err, domain.ErrChannelThrottled) ||
+				errors.Is(o.err, domain.ErrMainStatusUnavailable) ||
 				errors.Is(o.err, context.Canceled) ||
 				errors.Is(o.err, context.DeadlineExceeded) {
 				return o.err
@@ -351,6 +407,9 @@ func (g *Gateway) sendParallel(ctx context.Context, msg domain.PushMessage, chs 
 	}
 	if lastErr != nil {
 		return lastErr
+	}
+	if anySuppressed {
+		return nil
 	}
 	return fmt.Errorf("all parallel channels failed")
 }
@@ -370,6 +429,7 @@ func (g *Gateway) sendOne(ctx context.Context, msg domain.PushMessage, ch domain
 			SubTaskID:  msg.SubTaskID,
 			UserID:     msg.UserID,
 			Channel:    ch,
+			Provider:   string(ch),
 			Content:    content,
 		})
 		if err != nil {
@@ -386,10 +446,20 @@ func (g *Gateway) sendOne(ctx context.Context, msg domain.PushMessage, ch domain
 			return false, fmt.Errorf("delivery in progress")
 		}
 
+		if err := g.checkUnsubscribed(ctx, msg, ch); err != nil {
+			if errors.Is(err, domain.ErrUnsubscribed) {
+				_ = g.pushRepo.UpdateRecordStatus(ctx, recordID, domain.PushStatusSuppressed, "", "unsubscribed")
+				slog.Info("unsubscribe denied", "user", msg.UserID, "channel", ch)
+				return false, errSuppressed
+			}
+			_ = g.pushRepo.UpdateRecordStatus(ctx, recordID, domain.PushStatusQueued, "", err.Error())
+			return false, err
+		}
+
 		if ok, why := g.allowFreq(ctx, msg, ch); !ok {
-			_ = g.pushRepo.UpdateRecordStatus(ctx, recordID, domain.PushStatusFailed, "", why)
+			_ = g.pushRepo.UpdateRecordStatus(ctx, recordID, domain.PushStatusSuppressed, "", why)
 			slog.Info("freq denied", "user", msg.UserID, "channel", ch, "reason", why)
-			return false, nil
+			return false, errSuppressed
 		}
 
 		// 去重/频控通过后再扣渠道令牌；超时留 PEL，占位改回 queued
@@ -409,8 +479,14 @@ func (g *Gateway) sendOne(ctx context.Context, msg domain.PushMessage, ch domain
 
 		return g.doSend(ctx, msg, ch, content, true, recordID)
 	}
+	if err := g.checkUnsubscribed(ctx, msg, ch); err != nil {
+		if errors.Is(err, domain.ErrUnsubscribed) {
+			return false, errSuppressed
+		}
+		return false, err
+	}
 	if ok, _ := g.allowFreq(ctx, msg, ch); !ok {
-		return false, nil
+		return false, errSuppressed
 	}
 	if err := g.waitToken(ctx, ch, msg.Priority); err != nil {
 		return false, err
@@ -422,9 +498,9 @@ func (g *Gateway) doSend(ctx context.Context, msg domain.PushMessage, ch domain.
 	sender, err := g.channels.Get(ch)
 	if err != nil {
 		if save && recordID > 0 {
-			_ = g.pushRepo.UpdateRecordStatus(ctx, recordID, domain.PushStatusFailed, "", err.Error())
+			_ = g.pushRepo.UpdateRecordStatus(ctx, recordID, domain.PushStatusUnreachable, "", err.Error())
 		}
-		return false, err
+		return false, errSuppressed
 	}
 
 	req := domain.SendRequest{
@@ -441,7 +517,13 @@ func (g *Gateway) doSend(ctx context.Context, msg domain.PushMessage, ch domain.
 	var lastErr error
 	for attempt := 0; attempt <= g.maxRetry; attempt++ {
 		// 仅首次与每次 backoff 后刷新状态，避免每 attempt 打库
-		st, _ := g.loadMainSnap(ctx, msg.MainTaskID, attempt > 0)
+		st, _, snapErr := g.loadMainSnap(ctx, msg.MainTaskID, attempt > 0)
+		if snapErr != nil {
+			if save && recordID > 0 {
+				_ = g.pushRepo.UpdateRecordStatus(ctx, recordID, domain.PushStatusQueued, "", snapErr.Error())
+			}
+			return false, snapErr
+		}
 		if st == domain.TaskStatusCancelled {
 			if save && recordID > 0 {
 				_ = g.pushRepo.UpdateRecordStatus(ctx, recordID, domain.PushStatusCancelled, "", "main task cancelled")
@@ -473,6 +555,7 @@ func (g *Gateway) doSend(ctx context.Context, msg domain.PushMessage, ch domain.
 	}
 
 	status := domain.PushStatusSent
+	provider := string(ch)
 	providerID := ""
 	errMsg := ""
 	ok := true
@@ -489,10 +572,13 @@ func (g *Gateway) doSend(ctx context.Context, msg domain.PushMessage, ch domain.
 		slog.Warn("push failed", "user", msg.UserID, "channel", ch, "err", errMsg)
 	} else {
 		providerID = result.ProviderID
+		if result.Provider != "" {
+			provider = result.Provider
+		}
 	}
 
 	if save && recordID > 0 {
-		if err := g.pushRepo.UpdateRecordStatus(ctx, recordID, status, providerID, errMsg); err != nil {
+		if err := g.pushRepo.UpdateRecordDelivery(ctx, recordID, status, provider, providerID, errMsg); err != nil {
 			return false, err
 		}
 	}
