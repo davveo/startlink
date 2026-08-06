@@ -128,7 +128,7 @@ open http://localhost:3000
 
 | 服务 | 地址/端口 | 默认凭据 |
 | --- | --- | --- |
-| Web 运营台 | `http://localhost:3000` | 登录页；默认 `admin` / `admin123`（务必改密） |
+| Web 运营台 | `http://localhost:3000` | 登录页；默认 `admin` / `admin123`（角色 admin；另有 operator/viewer 示例账号，务必改密） |
 | API | `http://localhost:8080` | Session Cookie 鉴权；同运营台账号 |
 | MySQL | `localhost:3306/starlink` | `root` / `root` |
 | Redis | `localhost:6379` | 无密码 |
@@ -435,12 +435,18 @@ curl -b /tmp/starlink.cookie http://localhost:8080/api/v1/campaigns/biz/campaign
 {"code": 40001, "message": "invalid parameter"}
 ```
 
-所有接口都在 `/api/v1` 下。运营台使用 **配置文件账号 + HMAC 签名 HttpOnly Session Cookie** 鉴权（无 users 表、无 RBAC）。
+所有接口都在 `/api/v1` 下。运营台使用 **配置文件账号 + HMAC 签名 HttpOnly Session Cookie** 鉴权，并带简易 RBAC（角色 → 菜单/写操作权限码）。
 
 - **公开**：`GET /healthz`、`POST /api/v1/auth/login`、`GET /api/v1/auth/me`（未登录返回业务码 `40101`）、`POST /api/v1/callbacks/receipt`
 - **需登录**：其余 `/api/v1/*`（含 `POST /auth/logout`）；无有效 Cookie → HTTP 401 + `code: 40101`
-- `auth.enabled: false` 时跳过中间件（便于单测/紧急排障）
-- 默认账号：`admin` / `admin123`（写在 YAML，**务必改密**并更换 `session_secret`）
+- **写接口**：另需对应权限码，否则 HTTP 403 + `code: 40301`
+- `auth.enabled: false` 时跳过鉴权/授权（便于单测/紧急排障；`/me` 返回全权限）
+- 默认账号（YAML，**务必改密**并更换 `session_secret`）：
+  - `admin` / `admin123` → 角色 `admin`（全权限）
+  - `operator` / `operator123` → 活动/模板/通知（无审计）
+  - `viewer` / `viewer123` → 只读菜单，无写按钮
+
+给账号赋权：在 `auth.users` 中为用户设置 `role: admin|operator|viewer`（空则 viewer）。权限表见 `internal/auth/rbac.go`。
 
 curl 联调可先登录并保存 Cookie：
 
@@ -455,9 +461,9 @@ curl -c /tmp/starlink.cookie -X POST http://localhost:8080/api/v1/auth/login \
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| `POST` | `/api/v1/auth/login` | 登录；body `{username,password}`；Set-Cookie |
+| `POST` | `/api/v1/auth/login` | 登录；body `{username,password}`；返回 `username/role/roles/permissions`；Set-Cookie |
 | `POST` | `/api/v1/auth/logout` | 退出；清 Cookie（需已登录） |
-| `GET` | `/api/v1/auth/me` | 当前用户 `{username}`；未登录 40101 |
+| `GET` | `/api/v1/auth/me` | 当前用户含 `roles` + `permissions`；未登录 40101 |
 
 ### 活动
 
@@ -1036,7 +1042,7 @@ pending → running ⇄ paused
 
 ### 六、安全与可观测性
 
-27. **安全能力部分缺失。** 运营台已有配置账号 + Session Cookie 登录门禁（租户/RBAC/改密 UI 仍待办）。渠道回执接口仍公开、无签名校验。`webhook_url` 由调用方任意提供且无白名单，存在 SSRF 风险；Webhook 本身也没有签名、重试或持久化 outbox。`response.Fail` 会把内部错误文本返回给客户端。
+27. **安全能力部分缺失。** 运营台已有配置账号 + Session Cookie 登录门禁与简易 RBAC（租户隔离/改密 UI/多级审批仍待办）。渠道回执接口仍公开、无签名校验。`webhook_url` 由调用方任意提供且无白名单，存在 SSRF 风险；Webhook 本身也没有签名、重试或持久化 outbox。`response.Fail` 会把内部错误文本返回给客户端。
 28. **启动迁移风险。** API、Scheduler、Pusher 都会执行 `AutoMigrate`，三个进程可能并发执行 DDL；迁移前的历史重复流水清理错误还被 `_ =` 忽略。生产应由单独的迁移任务执行。
 29. **健康检查过浅。** `/healthz` 不检查依赖，没有 readiness、Prometheus 指标、链路追踪、结构化审计或告警。
 30. **~~测试为空~~（已有基础单测）。** 覆盖状态机、渠道求交、NormalizeChannels、ResolvePriority、RenderTemplate、MQ PEL/DLQ、聚合幂等；集成/E2E 仍待扩。

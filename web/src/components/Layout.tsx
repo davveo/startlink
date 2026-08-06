@@ -2,15 +2,16 @@ import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { api } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
+import { Perm } from '../auth/permissions'
 import { cn } from '../lib/cn'
 import { Button } from './ui'
 
 const navItems = [
-  { to: '/', end: true, label: '概览' },
-  { to: '/tasks', label: '任务' },
-  { to: '/templates', label: '模板' },
-  { to: '/notifications', label: '通知' },
-  { to: '/audit-logs', label: '审计日志' },
+  { to: '/', end: true, label: '运营概览', perm: Perm.MenuOverview },
+  { to: '/tasks', label: '任务管理', perm: Perm.MenuTasks },
+  { to: '/templates', label: '模板中心', perm: Perm.MenuTemplates },
+  { to: '/notifications', label: '通知管理', perm: Perm.MenuNotifications },
+  { to: '/audit-logs', label: '审计日志', perm: Perm.MenuAudit },
 ] as const
 
 const navClass = ({ isActive }: { isActive: boolean }) =>
@@ -22,7 +23,7 @@ const navClass = ({ isActive }: { isActive: boolean }) =>
   )
 
 export function Layout() {
-  const { user, logout } = useAuth()
+  const { user, logout, can } = useAuth()
   const navigate = useNavigate()
   const [unread, setUnread] = useState(0)
 
@@ -88,6 +89,8 @@ export function Layout() {
     navigate('/login', { replace: true })
   }
 
+  const visibleNav = navItems.filter((item) => can(item.perm))
+
   return (
     <div className="flex min-h-screen">
       <aside className="sticky top-0 flex h-screen w-[220px] shrink-0 flex-col bg-ink text-[#f7f8fa]">
@@ -99,7 +102,7 @@ export function Layout() {
         </div>
 
         <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto px-3 py-4">
-          {navItems.map((item) => (
+          {visibleNav.map((item) => (
             <NavLink key={item.to} to={item.to} end={'end' in item ? item.end : undefined} className={navClass}>
               <span className="inline-flex w-full items-center justify-between gap-2">
                 <span>{item.label}</span>
@@ -114,9 +117,14 @@ export function Layout() {
         </nav>
 
         <div className="border-t border-white/10 px-4 py-4">
-          <div className="mb-2 truncate text-sm text-white/70" title={user?.username}>
+          <div className="mb-0.5 truncate text-sm text-white/70" title={user?.username}>
             {user?.username}
           </div>
+          {user?.role ? (
+            <div className="mb-2 text-[11px] text-white/40" title={user.permissions.join(', ')}>
+              角色 · {user.role}
+            </div>
+          ) : null}
           <Button
             type="button"
             variant="ghost"

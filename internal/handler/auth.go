@@ -33,7 +33,13 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	}
 	c.Set("audit_login_user", req.Username)
 	h.sessions.IssueCookie(c, req.Username)
-	response.OK(c, gin.H{"username": req.Username})
+	info := h.sessions.InfoFor(req.Username)
+	response.OK(c, gin.H{
+		"username":    info.Username,
+		"role":        info.Role,
+		"roles":       info.Roles,
+		"permissions": info.Permissions,
+	})
 }
 
 // Logout POST /api/v1/auth/logout
@@ -45,7 +51,13 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 // Me GET /api/v1/auth/me — 未登录返回 40101；公开路由，不经 RequireAuth。
 func (h *AuthHandler) Me(c *gin.Context) {
 	if !h.sessions.Enabled() {
-		response.OK(c, gin.H{"username": "anonymous", "auth_disabled": true})
+		response.OK(c, gin.H{
+			"username":      "anonymous",
+			"auth_disabled": true,
+			"role":          auth.RoleAdmin,
+			"roles":         []string{auth.RoleAdmin},
+			"permissions":   auth.AllPermissions(),
+		})
 		return
 	}
 	username, err := h.sessions.Username(c)
@@ -53,5 +65,11 @@ func (h *AuthHandler) Me(c *gin.Context) {
 		response.Fail(c, errcode.Unauthorized)
 		return
 	}
-	response.OK(c, gin.H{"username": username})
+	info := h.sessions.InfoFor(username)
+	response.OK(c, gin.H{
+		"username":    info.Username,
+		"role":        info.Role,
+		"roles":       info.Roles,
+		"permissions": info.Permissions,
+	})
 }

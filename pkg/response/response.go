@@ -23,6 +23,8 @@ func Fail(c *gin.Context, err error) {
 		switch {
 		case e.Code == 40101:
 			status = http.StatusUnauthorized
+		case e.Code == 40301:
+			status = http.StatusForbidden
 		case e.Code == 40901 || e.Code == 40902 || e.Code == 40903:
 			status = http.StatusConflict
 		case e.Code == 42901:

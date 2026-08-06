@@ -18,6 +18,8 @@ import (
 )
 
 const ctxUsernameKey = "auth_username"
+const ctxRoleKey = "auth_role"
+const ctxPermsKey = "auth_permissions"
 
 // Manager 签发/校验 HMAC 签名的 Session Cookie，并校验配置文件账号。
 type Manager struct {
@@ -26,15 +28,18 @@ type Manager struct {
 	cookieName string
 	ttl        time.Duration
 	users      map[string]string // username -> password
+	roles      map[string]string // username -> role
 }
 
 func NewManager(cfg config.AuthConfig) *Manager {
 	users := make(map[string]string, len(cfg.Users))
+	roles := make(map[string]string, len(cfg.Users))
 	for _, u := range cfg.Users {
 		if u.Username == "" {
 			continue
 		}
 		users[u.Username] = u.Password
+		roles[u.Username] = NormalizeRole(u.Role)
 	}
 	ttlHours := cfg.TTLHours
 	if ttlHours <= 0 {
@@ -50,6 +55,7 @@ func NewManager(cfg config.AuthConfig) *Manager {
 		cookieName: cookieName,
 		ttl:        time.Duration(ttlHours) * time.Hour,
 		users:      users,
+		roles:      roles,
 	}
 }
 
@@ -64,6 +70,37 @@ func (m *Manager) Authenticate(username, password string) bool {
 	}
 	expected, ok := m.users[username]
 	return ok && expected == password
+}
+
+// RoleOf 返回用户角色；未知用户返回 viewer。
+func (m *Manager) RoleOf(username string) string {
+	if role, ok := m.roles[username]; ok {
+		return role
+	}
+	return RoleViewer
+}
+
+// PermissionsOf 返回用户权限列表。
+func (m *Manager) PermissionsOf(username string) []string {
+	return PermissionsForRole(m.RoleOf(username))
+}
+
+// UserInfo 登录/me 响应字段。
+type UserInfo struct {
+	Username    string   `json:"username"`
+	Role        string   `json:"role"`
+	Roles       []string `json:"roles"`
+	Permissions []string `json:"permissions"`
+}
+
+func (m *Manager) InfoFor(username string) UserInfo {
+	role := m.RoleOf(username)
+	return UserInfo{
+		Username:    username,
+		Role:        role,
+		Roles:       []string{role},
+		Permissions: m.PermissionsOf(username),
+	}
 }
 
 // IssueCookie 写入 HttpOnly Session Cookie（载荷 username|exp + HMAC）。
@@ -113,10 +150,27 @@ func UsernameFromContext(c *gin.Context) string {
 	return s
 }
 
+// RoleFromContext 读取 RequireAuth 写入的角色。
+func RoleFromContext(c *gin.Context) string {
+	v, _ := c.Get(ctxRoleKey)
+	s, _ := v.(string)
+	return s
+}
+
+// PermissionsFromContext 读取 RequireAuth 写入的权限。
+func PermissionsFromContext(c *gin.Context) []string {
+	v, _ := c.Get(ctxPermsKey)
+	s, _ := v.([]string)
+	return s
+}
+
 // RequireAuth Gin 中间件：校验 Cookie；auth.enabled=false 时直接放行。
 func (m *Manager) RequireAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if !m.enabled {
+			c.Set(ctxUsernameKey, "anonymous")
+			c.Set(ctxRoleKey, RoleAdmin)
+			c.Set(ctxPermsKey, AllPermissions())
 			c.Next()
 			return
 		}
@@ -126,7 +180,32 @@ func (m *Manager) RequireAuth() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+		role := m.RoleOf(username)
 		c.Set(ctxUsernameKey, username)
+		c.Set(ctxRoleKey, role)
+		c.Set(ctxPermsKey, PermissionsForRole(role))
+		c.Next()
+	}
+}
+
+// RequirePermission 校验当前用户是否具备指定权限码；auth 关闭时放行。
+func (m *Manager) RequirePermission(perm string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !m.enabled {
+			c.Next()
+			return
+		}
+		perms, _ := c.Get(ctxPermsKey)
+		list, _ := perms.([]string)
+		if list == nil {
+			username := UsernameFromContext(c)
+			list = m.PermissionsOf(username)
+		}
+		if !HasPermission(list, perm) {
+			response.Fail(c, errcode.Forbidden)
+			c.Abort()
+			return
+		}
 		c.Next()
 	}
 }

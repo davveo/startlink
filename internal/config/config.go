@@ -37,6 +37,8 @@ type AuthConfig struct {
 type AuthUser struct {
 	Username string `yaml:"username"`
 	Password string `yaml:"password"`
+	// Role 绑定角色：admin | operator | viewer；空则 viewer
+	Role string `yaml:"role"`
 }
 
 // LogConfig 全局日志

@@ -8,6 +8,7 @@ log:
 
 # 运营台登录门禁：配置文件账号 + HMAC 签名 Session Cookie（无 users 表）
 # enabled=false 时跳过中间件（单测/紧急排障）；生产务必改密并更换 session_secret
+# role: admin（全权限）| operator（活动/模板/通知，无审计）| viewer（只读菜单，无写按钮）
 auth:
   enabled: true
   session_secret: "change-me-in-production"
@@ -16,6 +17,13 @@ auth:
   users:
     - username: admin
       password: admin123
+      role: admin
+    - username: operator
+      password: operator123
+      role: operator
+    - username: viewer
+      password: viewer123
+      role: viewer
 
 mysql:
   dsn: "root:root@tcp(127.0.0.1:3306)/starlink?charset=utf8mb4&parseTime=True&loc=Local"

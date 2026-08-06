@@ -159,9 +159,12 @@
 
 ## 待办 · 多租户、安全与平台化
 
-- [~] **API 鉴权授权**：运营台登录门禁已做（YAML 账号 + Session Cookie 保护 `/api/v1`；回执与 healthz 放行）；租户/业务线授权与 RBAC 仍待办
+- [x] **API 鉴权授权**：运营台登录门禁已做（YAML 账号 + Session Cookie 保护 `/api/v1`；回执与 healthz 放行）；简易 RBAC（角色→菜单/按钮权限）已落地，租户/业务线授权仍待办
 - [ ] **多租户数据模型**：活动、模板、流水和配置增加 `tenant_id/app_id`；`biz_id` 改为租户内唯一
-- [ ] **RBAC 与审批策略**：区分创建、审核、发送、取消、运维和审计权限；大人群活动支持多级审批
+- [~] **RBAC 与审批策略**：角色（admin/operator/viewer）+ 权限码已配置驱动；多级审批仍待办
+  - 权限码：`menu.*` / `campaign.*` / `template.*` / `notification.read` / `audit.view`（见 `internal/auth/rbac.go`）
+  - 账号在 `auth.users[].role` 绑定角色；登录与 `/auth/me` 返回 `roles` + `permissions`
+  - 写接口 `RequirePermission`；前端 `Can` / `usePermission` 隐藏无权限按钮，侧栏按 `menu.*` 过滤
 - [ ] **回执接口鉴权与验签**：防伪造送达/点击；校验时间戳、nonce 和请求摘要
 - [ ] **密钥与凭据管理**：Audience/Channel HTTP 支持 API Key、OAuth/mTLS，敏感配置从 Secret Manager 或环境变量注入
 - [ ] **Webhook 安全与可靠**：URL 白名单（防 SSRF）、签名、失败重试；终态事件 outbox 落库，独立 Worker 重试/死信/手工重放
@@ -192,7 +195,7 @@
 1. ~~第一期 P0～P4（可靠性、口径、SPI、配额、工程债）~~ ✅
 2. ~~第二期正确性补强（退订终检、状态 fail-closed、回执事务/唯一键、provider 消歧、幂等顺序、分页保护、Extra、HTTP 限制、抑制态）~~ ✅
 3. API 与运营：活动列表、预检、测试发送、投递漏斗、DLQ 运维 API
-4. 安全与平台：~~登录门禁~~（租户/RBAC 仍待）、回执验签、Webhook outbox、独立迁移、Readiness、指标
+4. 安全与平台：~~登录门禁 + 简易 RBAC~~（租户/审批仍待）、回执验签、Webhook outbox、独立迁移、Readiness、指标
 5. ~~模板与投放：多渠道模板、版本历史、多语言、用户时区、实验平台~~ ✅
 6. 多租户、数据归档、隐私治理、集成/E2E/容量测试
 

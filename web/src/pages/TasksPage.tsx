@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { ApiError, api } from '../api/client'
 import type { CampaignListItem, TaskStatus } from '../api/types'
 import { useAuth } from '../auth/AuthContext'
+import { Can } from '../auth/Can'
+import { Perm } from '../auth/permissions'
 import { StatusChip } from '../components/StatusChip'
 import {
   BtnRow,
@@ -130,22 +132,14 @@ export function TasksPage() {
 
   return (
     <div>
-      <PageHead
-        title="任务列表"
-        description={`查看主任务状态，支持批量暂停/恢复/取消/重推。共 ${total} 条。`}
-        actions={
-          <ButtonLink to="/campaigns" variant="primary">
-            创建活动
-          </ButtonLink>
-        }
-      />
+      <PageHead title="任务列表" description={`查看主任务状态，支持批量暂停/恢复/取消/重推。共 ${total} 条。`} />
 
       {err ? <Toast kind="error">{err}</Toast> : null}
       {msg ? <Toast kind="ok">{msg}</Toast> : null}
 
       <Panel>
-        <div className="grid gap-3.5 md:grid-cols-3">
-          <Field label="状态">
+        <div className="flex flex-wrap items-end gap-3">
+          <Field label="状态" noMargin className="min-w-[8rem] flex-[1_1_8rem]">
             <Select
               value={status}
               onChange={(e) => {
@@ -165,13 +159,13 @@ export function TasksPage() {
               <option value="retrying">重试中</option>
             </Select>
           </Field>
-          <Field label="业务场景">
+          <Field label="业务场景" noMargin className="min-w-[8rem] flex-[1_1_8rem]">
             <Input value={bizScene} onChange={(e) => setBizScene(e.target.value)} placeholder="demo" />
           </Field>
-          <Field label="渠道">
+          <Field label="渠道" noMargin className="min-w-[8rem] flex-[1_1_8rem]">
             <Input value={channel} onChange={(e) => setChannel(e.target.value)} placeholder="app_push" />
           </Field>
-          <Field label="优先级">
+          <Field label="优先级" noMargin className="min-w-[7rem] flex-[1_1_7rem]">
             <Select
               value={priority}
               onChange={(e) => {
@@ -184,41 +178,50 @@ export function TasksPage() {
               <option value="normal">普通</option>
             </Select>
           </Field>
-          <Field label="创建人">
+          <Field label="创建人" noMargin className="min-w-[8rem] flex-[1_1_8rem]">
             <Input value={createdBy} onChange={(e) => setCreatedBy(e.target.value)} placeholder={user?.username || 'admin'} />
           </Field>
-          <Field label="关键词（幂等键 / 标题）">
+          <Field label="关键词（幂等键 / 标题）" noMargin className="min-w-[11rem] flex-[1_1_12rem]">
             <Input
               value={keyword}
               onChange={(e) => setKeyword(e.target.value)}
               placeholder="camp- / Demo"
             />
           </Field>
+          <BtnRow className="shrink-0">
+            <Button
+              variant="ink"
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                setPage(1)
+                void load()
+              }}
+            >
+              查询
+            </Button>
+            <Can perm={Perm.CampaignCreate}>
+              <ButtonLink to="/campaigns" variant="primary">
+                创建活动
+              </ButtonLink>
+            </Can>
+          </BtnRow>
         </div>
-        <BtnRow>
-          <Button
-            variant="ink"
-            type="button"
-            disabled={busy}
-            onClick={() => {
-              setPage(1)
-              void load()
-            }}
-          >
-            查询
-          </Button>
-          <Button variant="ghost" type="button" disabled={busy || !selected.length} onClick={() => void batch('pause')}>
-            批量暂停
-          </Button>
-          <Button variant="ghost" type="button" disabled={busy || !selected.length} onClick={() => void batch('resume')}>
-            批量恢复
-          </Button>
-          <Button variant="danger" type="button" disabled={busy || !selected.length} onClick={() => void batch('cancel')}>
-            批量取消
-          </Button>
-          <Button variant="primary" type="button" disabled={busy || !selected.length} onClick={() => void batch('retry')}>
-            批量重推
-          </Button>
+        <BtnRow className="mt-3">
+          <Can perm={Perm.CampaignBatch}>
+            <Button variant="ghost" type="button" disabled={busy || !selected.length} onClick={() => void batch('pause')}>
+              批量暂停
+            </Button>
+            <Button variant="ghost" type="button" disabled={busy || !selected.length} onClick={() => void batch('resume')}>
+              批量恢复
+            </Button>
+            <Button variant="danger" type="button" disabled={busy || !selected.length} onClick={() => void batch('cancel')}>
+              批量取消
+            </Button>
+            <Button variant="primary" type="button" disabled={busy || !selected.length} onClick={() => void batch('retry')}>
+              批量重推
+            </Button>
+          </Can>
         </BtnRow>
       </Panel>
 
@@ -271,9 +274,11 @@ export function TasksPage() {
                 <Td>
                   <BtnRow>
                     {t.status === 'draft' ? (
-                      <Button variant="primary" type="button" disabled={busy} onClick={() => void publish(t.id)}>
-                        发布
-                      </Button>
+                      <Can perm={Perm.CampaignPublish}>
+                        <Button variant="primary" type="button" disabled={busy} onClick={() => void publish(t.id)}>
+                          发布
+                        </Button>
+                      </Can>
                     ) : null}
                     <ButtonLink to={`/tasks/${t.id}/subtasks`} variant="ghost">
                       子任务
@@ -284,15 +289,19 @@ export function TasksPage() {
                     <ButtonLink to={`/progress?task=${t.id}`} variant="ghost">
                       进度
                     </ButtonLink>
-                    <Button variant="ghost" type="button" disabled={busy} onClick={() => void copyOne(t.id)}>
-                      复制
-                    </Button>
-                    <a
-                      className="inline-flex items-center rounded-full border border-line px-3 py-1 text-xs"
-                      href={api.exportSyncUrl(t.id, 'records')}
-                    >
-                      导出
-                    </a>
+                    <Can perm={Perm.CampaignCopy}>
+                      <Button variant="ghost" type="button" disabled={busy} onClick={() => void copyOne(t.id)}>
+                        复制
+                      </Button>
+                    </Can>
+                    <Can perm={Perm.CampaignExport}>
+                      <a
+                        className="inline-flex items-center rounded-full border border-line px-3 py-1 text-xs"
+                        href={api.exportSyncUrl(t.id, 'records')}
+                      >
+                        导出
+                      </a>
+                    </Can>
                   </BtnRow>
                 </Td>
               </tr>

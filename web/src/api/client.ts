@@ -62,7 +62,12 @@ export const api = {
   healthz: () => request<{ status: string }>('/healthz'),
 
   login: (username: string, password: string) =>
-    request<{ username: string }>('/api/v1/auth/login', {
+    request<{
+      username: string
+      role?: string
+      roles?: string[]
+      permissions?: string[]
+    }>('/api/v1/auth/login', {
       method: 'POST',
       body: JSON.stringify({ username, password }),
     }),
@@ -73,7 +78,14 @@ export const api = {
       body: '{}',
     }),
 
-  me: () => request<{ username: string; auth_disabled?: boolean }>('/api/v1/auth/me'),
+  me: () =>
+    request<{
+      username: string
+      auth_disabled?: boolean
+      role?: string
+      roles?: string[]
+      permissions?: string[]
+    }>('/api/v1/auth/me'),
 
   listChannels: () => request<{ channels: ChannelType[] }>('/api/v1/channels'),
 

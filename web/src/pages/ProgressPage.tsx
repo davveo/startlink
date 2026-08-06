@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { ApiError, api } from '../api/client'
 import type { ProgressView } from '../api/types'
+import { Can } from '../auth/Can'
+import { Perm } from '../auth/permissions'
 import { StatusChip } from '../components/StatusChip'
 import {
   BtnRow,
@@ -144,9 +146,11 @@ export function ProgressPage() {
               <Button variant="ink" type="submit" disabled={busy}>
                 查询
               </Button>
-              <ButtonLink to="/campaigns" variant="ghost">
-                去创建活动
-              </ButtonLink>
+              <Can perm={Perm.CampaignCreate}>
+                <ButtonLink to="/campaigns" variant="ghost">
+                  去创建活动
+                </ButtonLink>
+              </Can>
               <label className="inline-flex cursor-pointer items-center gap-2 self-center">
                 <Chip tone="muted">
                   <input
@@ -206,38 +210,46 @@ export function ProgressPage() {
               <ButtonLink to={`/ops/${progress.task_id}`} variant="ghost">
                 投递分析
               </ButtonLink>
-              <Button
-                variant="ghost"
-                type="button"
-                disabled={busy}
-                onClick={() => void runAction(() => api.pauseCampaign(progress.task_id), '已暂停')}
-              >
-                暂停
-              </Button>
-              <Button
-                variant="ghost"
-                type="button"
-                disabled={busy}
-                onClick={() => void runAction(() => api.resumeCampaign(progress.task_id), '已恢复')}
-              >
-                恢复
-              </Button>
-              <Button
-                variant="danger"
-                type="button"
-                disabled={busy}
-                onClick={() => void runAction(() => api.cancelCampaign(progress.task_id), '已取消')}
-              >
-                取消
-              </Button>
-              <Button
-                variant="primary"
-                type="button"
-                disabled={busy}
-                onClick={() => void runAction(() => api.retryCampaign(progress.task_id), '已触发重推')}
-              >
-                失败重推
-              </Button>
+              <Can perm={Perm.CampaignPause}>
+                <Button
+                  variant="ghost"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void runAction(() => api.pauseCampaign(progress.task_id), '已暂停')}
+                >
+                  暂停
+                </Button>
+              </Can>
+              <Can perm={Perm.CampaignResume}>
+                <Button
+                  variant="ghost"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void runAction(() => api.resumeCampaign(progress.task_id), '已恢复')}
+                >
+                  恢复
+                </Button>
+              </Can>
+              <Can perm={Perm.CampaignCancel}>
+                <Button
+                  variant="danger"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void runAction(() => api.cancelCampaign(progress.task_id), '已取消')}
+                >
+                  取消
+                </Button>
+              </Can>
+              <Can perm={Perm.CampaignRetry}>
+                <Button
+                  variant="primary"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void runAction(() => api.retryCampaign(progress.task_id), '已触发重推')}
+                >
+                  失败重推
+                </Button>
+              </Can>
             </BtnRow>
           </div>
         ) : (

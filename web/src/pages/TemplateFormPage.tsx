@@ -3,6 +3,8 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { ApiError, api } from '../api/client'
 import type { ChannelContent, ChannelType, MissingVarPolicy, Template, VarDef } from '../api/types'
 import { useAuth } from '../auth/AuthContext'
+import { Can } from '../auth/Can'
+import { Perm } from '../auth/permissions'
 import {
   BtnRow,
   Button,
@@ -364,9 +366,11 @@ export function TemplateFormPage() {
           ) : null}
 
           <BtnRow>
-            <Button variant="primary" type="submit" disabled={busy || (isEdit && !editing)}>
-              {isEdit ? '保存修改' : '创建草稿'}
-            </Button>
+            <Can perm={isEdit ? Perm.TemplateEdit : Perm.TemplateCreate}>
+              <Button variant="primary" type="submit" disabled={busy || (isEdit && !editing)}>
+                {isEdit ? '保存修改' : '创建草稿'}
+              </Button>
+            </Can>
             <Button type="button" variant="ghost" disabled={busy} onClick={() => void onPreview()}>
               预览渲染
             </Button>

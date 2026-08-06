@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ApiError, api } from '../api/client'
 import type { Notification } from '../api/types'
+import { Can } from '../auth/Can'
+import { Perm } from '../auth/permissions'
 import {
   BtnRow,
   Button,
@@ -115,9 +117,11 @@ export function NotificationsPage() {
             <Button type="button" variant="ghost" disabled={busy} onClick={() => void load()}>
               刷新
             </Button>
-            <Button type="button" variant="ink" disabled={busy} onClick={() => void markAll()}>
-              全部已读
-            </Button>
+            <Can perm={Perm.NotificationRead}>
+              <Button type="button" variant="ink" disabled={busy} onClick={() => void markAll()}>
+                全部已读
+              </Button>
+            </Can>
           </BtnRow>
         }
       />
@@ -200,15 +204,17 @@ export function NotificationsPage() {
                         </>
                       ) : null}
                       {unread ? (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          className="px-3 py-1.5 text-xs"
-                          disabled={busy}
-                          onClick={() => void markRead(n.id)}
-                        >
-                          标为已读
-                        </Button>
+                        <Can perm={Perm.NotificationRead}>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            className="px-3 py-1.5 text-xs"
+                            disabled={busy}
+                            onClick={() => void markRead(n.id)}
+                          >
+                            标为已读
+                          </Button>
+                        </Can>
                       ) : null}
                     </div>
                   </div>

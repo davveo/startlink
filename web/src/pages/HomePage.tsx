@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ApiError, api } from '../api/client'
 import type { OverviewView } from '../api/types'
+import { Can } from '../auth/Can'
+import { Perm } from '../auth/permissions'
 import { StatusChip } from '../components/StatusChip'
 import {
   BtnRow,
@@ -84,15 +86,21 @@ export function HomePage() {
           基于真实活动与流水统计：任务分布、近 {sends?.window_hours ?? 24} 小时发送表现，以及最近活动。
         </p>
         <BtnRow className="mt-1">
-          <ButtonLink to="/tasks" variant="primary">
-            任务列表
-          </ButtonLink>
-          <ButtonLink to="/campaigns" variant="ink">
-            创建活动
-          </ButtonLink>
-          <ButtonLink to="/notifications" variant="ghost">
-            通知中心
-          </ButtonLink>
+          <Can perm={Perm.MenuTasks}>
+            <ButtonLink to="/tasks" variant="primary">
+              任务列表
+            </ButtonLink>
+          </Can>
+          <Can perm={Perm.CampaignCreate}>
+            <ButtonLink to="/campaigns" variant="ink">
+              创建活动
+            </ButtonLink>
+          </Can>
+          <Can perm={Perm.MenuNotifications}>
+            <ButtonLink to="/notifications" variant="ghost">
+              通知中心
+            </ButtonLink>
+          </Can>
         </BtnRow>
       </section>
 

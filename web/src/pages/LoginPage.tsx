@@ -76,6 +76,9 @@ export function LoginPage() {
           <Button type="submit" variant="primary" className="mt-2 w-full" disabled={busy || loading}>
             {busy ? '登录中…' : '登录'}
           </Button>
+          <p className="mt-3 text-center text-[11px] leading-snug text-muted">
+            示例：admin（全权限）/ operator（运营）/ viewer（只读）
+          </p>
         </form>
       </div>
     </div>

@@ -14,6 +14,13 @@ auth:
   users:
     - username: admin
       password: admin123
+      role: admin
+    - username: operator
+      password: operator123
+      role: operator
+    - username: viewer
+      password: viewer123
+      role: viewer
 
 mysql:
   dsn: "root:root@tcp(mysql:3306)/starlink?charset=utf8mb4&parseTime=True&loc=Local"

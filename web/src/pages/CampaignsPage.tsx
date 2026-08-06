@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import { ApiError, api } from '../api/client'
 import type { ChannelMode, ChannelRouteRule, ChannelType, Priority, Template } from '../api/types'
 import { useAuth } from '../auth/AuthContext'
+import { Can } from '../auth/Can'
+import { Perm } from '../auth/permissions'
 import {
   BtnRow,
   Button,
@@ -509,130 +511,136 @@ export function CampaignsPage() {
             </small>
           </label>
           <BtnRow className="mb-3">
-            <Button
-              variant="ghost"
-              type="button"
-              disabled={busy}
-              title="估算目标人数与命中情况（原始→过滤→AB→可达），不创建活动、不发送。可能未扫完全部人群。"
-              onClick={() => {
-                void (async () => {
-                  setBusy(true)
-                  setErr('')
-                  try {
-                    const multi = form.extraChannels
-                    const est = await api.estimateAudience({
-                      biz_scene: form.biz_scene,
-                      audience_ref: form.audience_ref,
-                      channel: multi.length ? undefined : form.channel,
-                      channels: multi.length ? multi : undefined,
-                      audience_extra: { total: Number(form.audience_total) || 20 },
-                      sample_limit: 10,
-                    })
-                    setEstimateText(JSON.stringify(est, null, 2))
-                    setMsg('人群试算完成')
-                  } catch (e) {
-                    setErr(e instanceof ApiError ? e.message : '试算失败')
-                  } finally {
-                    setBusy(false)
-                  }
-                })()
-              }}
-            >
-              人群试算
-            </Button>
-            <Button
-              variant="ghost"
-              type="button"
-              disabled={busy || !form.template_id}
-              title="检查模板可用性、变量 Schema、内嵌人群试算与容量/费用提示，不创建活动、不发送。"
-              onClick={() => {
-                void (async () => {
-                  setBusy(true)
-                  setErr('')
-                  try {
-                    const ch = buildChannelPayload()
-                    const pf = await api.preflight({
-                      biz_id: form.biz_id,
-                      biz_scene: form.biz_scene,
-                      title: form.title,
-                      template_id: form.template_id,
-                      audience_ref: form.audience_ref,
-                      ...ch,
-                      audience_extra: { total: Number(form.audience_total) || 20 },
-                    })
-                    setPreflightText(JSON.stringify(pf, null, 2))
-                    setMsg('预检完成')
-                  } catch (e) {
-                    setErr(e instanceof ApiError ? e.message : e instanceof Error ? e.message : '预检失败')
-                  } finally {
-                    setBusy(false)
-                  }
-                })()
-              }}
-            >
-              预检
-            </Button>
-            <Button
-              variant="ghost"
-              type="button"
-              disabled={busy || !form.template_id}
-              title="按样本变量渲染最终标题/正文（含分渠内容），不调渠道、不写流水。"
-              onClick={() => {
-                void (async () => {
-                  setBusy(true)
-                  try {
-                    const multi = form.extraChannels
-                    const dr = await api.dryRun({
-                      template_id: form.template_id,
-                      title: form.title,
-                      channel: multi.length ? undefined : form.channel,
-                      channels: multi.length ? multi : undefined,
-                      vars: { name: 'Starlink' },
-                      send: false,
-                    })
-                    setDryRunText(JSON.stringify(dr, null, 2))
-                    setMsg('Dry-run 完成')
-                  } catch (e) {
-                    setErr(e instanceof ApiError ? e.message : 'dry-run 失败')
-                  } finally {
-                    setBusy(false)
-                  }
-                })()
-              }}
-            >
-              Dry-run 渲染
-            </Button>
-            <Button
-              variant="ghost"
-              type="button"
-              disabled={busy || !form.template_id}
-              title="向测试用户真实调用渠道发一条，写测试流水（不计入活动统计），用于验证通路。"
-              onClick={() => {
-                void (async () => {
-                  setBusy(true)
-                  try {
-                    const multi = form.extraChannels
-                    const dr = await api.dryRun({
-                      template_id: form.template_id,
-                      title: form.title,
-                      channel: multi.length ? undefined : form.channel,
-                      channels: multi.length ? multi : undefined,
-                      user_id: 'test_user_console',
-                      vars: { name: 'Starlink' },
-                      send: true,
-                    })
-                    setDryRunText(JSON.stringify(dr, null, 2))
-                    setMsg(dr.sent ? '测试发送已发出（测试流水）' : '测试发送未成功')
-                  } catch (e) {
-                    setErr(e instanceof ApiError ? e.message : '测试发送失败')
-                  } finally {
-                    setBusy(false)
-                  }
-                })()
-              }}
-            >
-              测试发送
-            </Button>
+            <Can perm={Perm.AudienceEstimate}>
+              <Button
+                variant="ghost"
+                type="button"
+                disabled={busy}
+                title="估算目标人数与命中情况（原始→过滤→AB→可达），不创建活动、不发送。可能未扫完全部人群。"
+                onClick={() => {
+                  void (async () => {
+                    setBusy(true)
+                    setErr('')
+                    try {
+                      const multi = form.extraChannels
+                      const est = await api.estimateAudience({
+                        biz_scene: form.biz_scene,
+                        audience_ref: form.audience_ref,
+                        channel: multi.length ? undefined : form.channel,
+                        channels: multi.length ? multi : undefined,
+                        audience_extra: { total: Number(form.audience_total) || 20 },
+                        sample_limit: 10,
+                      })
+                      setEstimateText(JSON.stringify(est, null, 2))
+                      setMsg('人群试算完成')
+                    } catch (e) {
+                      setErr(e instanceof ApiError ? e.message : '试算失败')
+                    } finally {
+                      setBusy(false)
+                    }
+                  })()
+                }}
+              >
+                人群试算
+              </Button>
+            </Can>
+            <Can perm={Perm.CampaignPreflight}>
+              <Button
+                variant="ghost"
+                type="button"
+                disabled={busy || !form.template_id}
+                title="检查模板可用性、变量 Schema、内嵌人群试算与容量/费用提示，不创建活动、不发送。"
+                onClick={() => {
+                  void (async () => {
+                    setBusy(true)
+                    setErr('')
+                    try {
+                      const ch = buildChannelPayload()
+                      const pf = await api.preflight({
+                        biz_id: form.biz_id,
+                        biz_scene: form.biz_scene,
+                        title: form.title,
+                        template_id: form.template_id,
+                        audience_ref: form.audience_ref,
+                        ...ch,
+                        audience_extra: { total: Number(form.audience_total) || 20 },
+                      })
+                      setPreflightText(JSON.stringify(pf, null, 2))
+                      setMsg('预检完成')
+                    } catch (e) {
+                      setErr(e instanceof ApiError ? e.message : e instanceof Error ? e.message : '预检失败')
+                    } finally {
+                      setBusy(false)
+                    }
+                  })()
+                }}
+              >
+                预检
+              </Button>
+            </Can>
+            <Can perm={Perm.CampaignDryRun}>
+              <Button
+                variant="ghost"
+                type="button"
+                disabled={busy || !form.template_id}
+                title="按样本变量渲染最终标题/正文（含分渠内容），不调渠道、不写流水。"
+                onClick={() => {
+                  void (async () => {
+                    setBusy(true)
+                    try {
+                      const multi = form.extraChannels
+                      const dr = await api.dryRun({
+                        template_id: form.template_id,
+                        title: form.title,
+                        channel: multi.length ? undefined : form.channel,
+                        channels: multi.length ? multi : undefined,
+                        vars: { name: 'Starlink' },
+                        send: false,
+                      })
+                      setDryRunText(JSON.stringify(dr, null, 2))
+                      setMsg('Dry-run 完成')
+                    } catch (e) {
+                      setErr(e instanceof ApiError ? e.message : 'dry-run 失败')
+                    } finally {
+                      setBusy(false)
+                    }
+                  })()
+                }}
+              >
+                Dry-run 渲染
+              </Button>
+              <Button
+                variant="ghost"
+                type="button"
+                disabled={busy || !form.template_id}
+                title="向测试用户真实调用渠道发一条，写测试流水（不计入活动统计），用于验证通路。"
+                onClick={() => {
+                  void (async () => {
+                    setBusy(true)
+                    try {
+                      const multi = form.extraChannels
+                      const dr = await api.dryRun({
+                        template_id: form.template_id,
+                        title: form.title,
+                        channel: multi.length ? undefined : form.channel,
+                        channels: multi.length ? multi : undefined,
+                        user_id: 'test_user_console',
+                        vars: { name: 'Starlink' },
+                        send: true,
+                      })
+                      setDryRunText(JSON.stringify(dr, null, 2))
+                      setMsg(dr.sent ? '测试发送已发出（测试流水）' : '测试发送未成功')
+                    } catch (e) {
+                      setErr(e instanceof ApiError ? e.message : '测试发送失败')
+                    } finally {
+                      setBusy(false)
+                    }
+                  })()
+                }}
+              >
+                测试发送
+              </Button>
+            </Can>
           </BtnRow>
           <p className="mb-3 text-xs text-muted">
             悬停按钮可看说明：试算/预检/渲染均不真正投放；测试发送会真实调渠道并记测试流水。
@@ -647,9 +655,11 @@ export function CampaignsPage() {
             <pre className="mb-3 max-h-40 overflow-auto rounded-lg bg-paper-deep p-3 text-xs">{dryRunText}</pre>
           ) : null}
           <BtnRow>
-            <Button variant="primary" type="submit" disabled={busy || !form.template_id}>
-              {form.as_draft ? '保存草稿' : '创建并开始拆分'}
-            </Button>
+            <Can perm={Perm.CampaignCreate}>
+              <Button variant="primary" type="submit" disabled={busy || !form.template_id}>
+                {form.as_draft ? '保存草稿' : '创建并开始拆分'}
+              </Button>
+            </Can>
             <ButtonLink to="/progress" variant="ghost">
               去查进度
             </ButtonLink>

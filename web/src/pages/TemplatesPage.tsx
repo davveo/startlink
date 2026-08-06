@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { ApiError, api } from '../api/client'
 import type { Template, TemplateStatus } from '../api/types'
 import { useAuth } from '../auth/AuthContext'
+import { Can } from '../auth/Can'
+import { Perm } from '../auth/permissions'
 import { StatusChip } from '../components/StatusChip'
 import {
   BtnRow,
@@ -91,9 +93,11 @@ export function TemplatesPage() {
             <Button variant="ink" type="button" onClick={() => void load()} disabled={busy}>
               刷新
             </Button>
-            <ButtonLink to="/templates/new" variant="primary">
-              创建模板
-            </ButtonLink>
+            <Can perm={Perm.TemplateCreate}>
+              <ButtonLink to="/templates/new" variant="primary">
+                创建模板
+              </ButtonLink>
+            </Can>
           </BtnRow>
         </div>
 
@@ -130,70 +134,84 @@ export function TemplatesPage() {
                   <BtnRow>
                     {t.status === 'draft' || t.status === 'rejected' ? (
                       <>
-                        <ButtonLink to={`/templates/${t.id}/edit`} variant="ghost">
-                          编辑
-                        </ButtonLink>
-                        <Button
-                          variant="primary"
-                          type="button"
-                          disabled={busy}
-                          onClick={() => void run(() => api.submitTemplate(t.id, operator), '已提交审核')}
-                        >
-                          提交
-                        </Button>
-                        <Button
-                          variant="danger"
-                          type="button"
-                          disabled={busy}
-                          onClick={() => void run(() => api.deleteTemplate(t.id), '已删除')}
-                        >
-                          删除
-                        </Button>
+                        <Can perm={Perm.TemplateEdit}>
+                          <ButtonLink to={`/templates/${t.id}/edit`} variant="ghost">
+                            编辑
+                          </ButtonLink>
+                        </Can>
+                        <Can perm={Perm.TemplateSubmit}>
+                          <Button
+                            variant="primary"
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void run(() => api.submitTemplate(t.id, operator), '已提交审核')}
+                          >
+                            提交
+                          </Button>
+                        </Can>
+                        <Can perm={Perm.TemplateDelete}>
+                          <Button
+                            variant="danger"
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void run(() => api.deleteTemplate(t.id), '已删除')}
+                          >
+                            删除
+                          </Button>
+                        </Can>
                       </>
                     ) : null}
                     {t.status === 'pending_review' ? (
                       <>
-                        <Button
-                          variant="primary"
-                          type="button"
-                          disabled={busy}
-                          onClick={() => void run(() => api.approveTemplate(t.id, operator), '已通过')}
-                        >
-                          通过
-                        </Button>
-                        <Button
-                          variant="danger"
-                          type="button"
-                          disabled={busy}
-                          onClick={() => {
-                            const reason = window.prompt('驳回原因', '文案需修改')
-                            if (!reason) return
-                            void run(() => api.rejectTemplate(t.id, reason, operator), '已驳回')
-                          }}
-                        >
-                          驳回
-                        </Button>
+                        <Can perm={Perm.TemplateApprove}>
+                          <Button
+                            variant="primary"
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void run(() => api.approveTemplate(t.id, operator), '已通过')}
+                          >
+                            通过
+                          </Button>
+                        </Can>
+                        <Can perm={Perm.TemplateReject}>
+                          <Button
+                            variant="danger"
+                            type="button"
+                            disabled={busy}
+                            onClick={() => {
+                              const reason = window.prompt('驳回原因', '文案需修改')
+                              if (!reason) return
+                              void run(() => api.rejectTemplate(t.id, reason, operator), '已驳回')
+                            }}
+                          >
+                            驳回
+                          </Button>
+                        </Can>
                       </>
                     ) : null}
                     {t.status === 'approved' ? (
-                      <Button
-                        variant="ghost"
-                        type="button"
-                        disabled={busy}
-                        onClick={() => void run(() => api.disableTemplate(t.id), '已停用')}
-                      >
-                        停用
-                      </Button>
+                      <Can perm={Perm.TemplateDisable}>
+                        <Button
+                          variant="ghost"
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void run(() => api.disableTemplate(t.id), '已停用')}
+                        >
+                          停用
+                        </Button>
+                      </Can>
                     ) : null}
                     {t.status === 'disabled' ? (
-                      <Button
-                        variant="ghost"
-                        type="button"
-                        disabled={busy}
-                        onClick={() => void run(() => api.enableTemplate(t.id), '已重新启用（待审）')}
-                      >
-                        启用
-                      </Button>
+                      <Can perm={Perm.TemplateEnable}>
+                        <Button
+                          variant="ghost"
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void run(() => api.enableTemplate(t.id), '已重新启用（待审）')}
+                        >
+                          启用
+                        </Button>
+                      </Can>
                     ) : null}
                   </BtnRow>
                 </Td>

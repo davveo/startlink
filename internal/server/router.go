@@ -46,12 +46,8 @@ func New(mode string, deps Deps) *gin.Engine {
 
 			protected.GET("/overview", deps.Campaign.Overview)
 
-			protected.POST("/campaigns", deps.Campaign.Create)
+			// 活动：读接口任意登录用户；写操作按权限码
 			protected.GET("/campaigns", deps.Campaign.List)
-			protected.POST("/campaigns/preflight", deps.Campaign.Preflight)
-			protected.POST("/campaigns/dry-run", deps.Campaign.DryRun)
-			protected.POST("/campaigns/batch/:action", deps.Campaign.Batch)
-			protected.POST("/audiences/estimate", deps.Campaign.EstimateAudience)
 			protected.GET("/campaigns/biz/:biz_id", deps.Campaign.GetByBizID)
 			protected.GET("/campaigns/:id/subtasks/:sub_id", deps.Campaign.GetSubTask)
 			protected.GET("/campaigns/:id/subtasks", deps.Campaign.ListSubTasks)
@@ -59,53 +55,69 @@ func New(mode string, deps Deps) *gin.Engine {
 			protected.GET("/campaigns/:id/failures", deps.Campaign.Failures)
 			protected.GET("/campaigns/:id/experiment", deps.Campaign.Experiment)
 			protected.GET("/campaigns/:id/records", deps.Campaign.ListRecords)
-			protected.GET("/campaigns/:id/export", deps.Campaign.ExportSync)
-			protected.POST("/campaigns/:id/exports", deps.Campaign.ExportAsync)
-			protected.POST("/campaigns/:id/copy", deps.Campaign.Copy)
-			protected.POST("/campaigns/:id/publish", deps.Campaign.Publish)
-			protected.PUT("/campaigns/:id", deps.Campaign.UpdateDraft)
 			protected.GET("/campaigns/:id", deps.Campaign.Get)
 			protected.GET("/campaigns/:id/progress", deps.Campaign.Progress)
-			protected.POST("/campaigns/:id/cancel", deps.Campaign.Cancel)
-			protected.POST("/campaigns/:id/pause", deps.Campaign.Pause)
-			protected.POST("/campaigns/:id/resume", deps.Campaign.Resume)
-			protected.POST("/campaigns/:id/retry", deps.Campaign.Retry)
 			protected.GET("/exports/:id", deps.Campaign.GetExport)
 			protected.GET("/exports/:id/download", deps.Campaign.DownloadExport)
 			protected.GET("/channels", deps.Campaign.ListChannels)
 
+			perm := noopPerm
+			if deps.Sessions != nil {
+				perm = deps.Sessions.RequirePermission
+			}
+			protected.POST("/campaigns", perm(auth.PermCampaignCreate), deps.Campaign.Create)
+			protected.POST("/campaigns/preflight", perm(auth.PermCampaignPreflight), deps.Campaign.Preflight)
+			protected.POST("/campaigns/dry-run", perm(auth.PermCampaignDryRun), deps.Campaign.DryRun)
+			protected.POST("/campaigns/batch/:action", perm(auth.PermCampaignBatch), deps.Campaign.Batch)
+			protected.POST("/audiences/estimate", perm(auth.PermAudienceEstimate), deps.Campaign.EstimateAudience)
+			protected.GET("/campaigns/:id/export", perm(auth.PermCampaignExport), deps.Campaign.ExportSync)
+			protected.POST("/campaigns/:id/exports", perm(auth.PermCampaignExport), deps.Campaign.ExportAsync)
+			protected.POST("/campaigns/:id/copy", perm(auth.PermCampaignCopy), deps.Campaign.Copy)
+			protected.POST("/campaigns/:id/publish", perm(auth.PermCampaignPublish), deps.Campaign.Publish)
+			protected.PUT("/campaigns/:id", perm(auth.PermCampaignUpdate), deps.Campaign.UpdateDraft)
+			protected.POST("/campaigns/:id/cancel", perm(auth.PermCampaignCancel), deps.Campaign.Cancel)
+			protected.POST("/campaigns/:id/pause", perm(auth.PermCampaignPause), deps.Campaign.Pause)
+			protected.POST("/campaigns/:id/resume", perm(auth.PermCampaignResume), deps.Campaign.Resume)
+			protected.POST("/campaigns/:id/retry", perm(auth.PermCampaignRetry), deps.Campaign.Retry)
+
 			// 模板中心
-			protected.POST("/templates", deps.Template.Create)
 			protected.GET("/templates", deps.Template.List)
-			protected.POST("/templates/preview", deps.Template.Preview)
 			protected.GET("/templates/code/:code", deps.Template.GetByCode)
 			protected.GET("/templates/:id", deps.Template.Get)
-			protected.PUT("/templates/:id", deps.Template.Update)
-			protected.DELETE("/templates/:id", deps.Template.Delete)
-			protected.POST("/templates/:id/submit", deps.Template.Submit)
-			protected.POST("/templates/:id/approve", deps.Template.Approve)
-			protected.POST("/templates/:id/reject", deps.Template.Reject)
-			protected.POST("/templates/:id/disable", deps.Template.Disable)
-			protected.POST("/templates/:id/enable", deps.Template.Enable)
 			protected.GET("/templates/:id/versions", deps.Template.ListVersions)
-			protected.POST("/templates/:id/rollback", deps.Template.Rollback)
+			protected.POST("/templates/preview", deps.Template.Preview)
+
+			protected.POST("/templates", perm(auth.PermTemplateCreate), deps.Template.Create)
+			protected.PUT("/templates/:id", perm(auth.PermTemplateEdit), deps.Template.Update)
+			protected.DELETE("/templates/:id", perm(auth.PermTemplateDelete), deps.Template.Delete)
+			protected.POST("/templates/:id/submit", perm(auth.PermTemplateSubmit), deps.Template.Submit)
+			protected.POST("/templates/:id/approve", perm(auth.PermTemplateApprove), deps.Template.Approve)
+			protected.POST("/templates/:id/reject", perm(auth.PermTemplateReject), deps.Template.Reject)
+			protected.POST("/templates/:id/disable", perm(auth.PermTemplateDisable), deps.Template.Disable)
+			protected.POST("/templates/:id/enable", perm(auth.PermTemplateEnable), deps.Template.Enable)
+			protected.POST("/templates/:id/rollback", perm(auth.PermTemplateRollback), deps.Template.Rollback)
 
 			// 消息通知中心
 			if deps.Notification != nil {
 				protected.GET("/notifications/stream", deps.Notification.Stream)
 				protected.GET("/notifications", deps.Notification.List)
 				protected.GET("/notifications/unread-count", deps.Notification.UnreadCount)
-				protected.POST("/notifications/read-all", deps.Notification.MarkAllRead)
-				protected.POST("/notifications/:id/read", deps.Notification.MarkRead)
+				protected.POST("/notifications/read-all", perm(auth.PermNotificationRead), deps.Notification.MarkAllRead)
+				protected.POST("/notifications/:id/read", perm(auth.PermNotificationRead), deps.Notification.MarkRead)
 			}
 
 			// 审计日志（查询本身不写审计，因 GET 被中间件跳过）
 			if deps.Audit != nil {
-				protected.GET("/audit-logs", deps.Audit.List)
+				protected.GET("/audit-logs", perm(auth.PermAuditView), deps.Audit.List)
 			}
 		}
 	}
 	return r
+}
+
+// noopPerm 无 Session Manager 时占位（测试/特殊装配）。
+func noopPerm(_ string) gin.HandlerFunc {
+	return func(c *gin.Context) { c.Next() }
 }
 
 // corsMiddleware 便于本地 Vite 直连 API；Compose 下前端走 nginx 同源反代可不依赖 CORS。

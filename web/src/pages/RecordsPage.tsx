@@ -3,6 +3,8 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { ApiError, api } from '../api/client'
 import type { ExportJob, PushRecord } from '../api/types'
 import { useAuth } from '../auth/AuthContext'
+import { Can } from '../auth/Can'
+import { Perm } from '../auth/permissions'
 import { StatusChip } from '../components/StatusChip'
 import {
   BtnRow,
@@ -199,17 +201,19 @@ export function RecordsPage() {
           <Button variant="ink" type="button" disabled={busy} onClick={onQuery}>
             查询
           </Button>
-          <Button variant="ghost" type="button" disabled={busy || !activeTask} onClick={() => void startExport()}>
-            异步导出
-          </Button>
-          {activeTask > 0 ? (
-            <a
-              className="inline-flex items-center justify-center rounded-full border border-line px-4 py-2 text-sm font-semibold"
-              href={api.exportSyncUrl(activeTask, 'records')}
-            >
-              同步 CSV
-            </a>
-          ) : null}
+          <Can perm={Perm.CampaignExport}>
+            <Button variant="ghost" type="button" disabled={busy || !activeTask} onClick={() => void startExport()}>
+              异步导出
+            </Button>
+            {activeTask > 0 ? (
+              <a
+                className="inline-flex items-center justify-center rounded-full border border-line px-4 py-2 text-sm font-semibold"
+                href={api.exportSyncUrl(activeTask, 'records')}
+              >
+                同步 CSV
+              </a>
+            ) : null}
+          </Can>
         </BtnRow>
         {exportJob ? (
           <p className="mt-3 text-sm text-muted">
