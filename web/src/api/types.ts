@@ -371,3 +371,86 @@ export type ExportJob = {
   error_msg?: string
   created_at: string
 }
+
+export type OverviewView = {
+  campaign_total: number
+  by_status: Record<string, number>
+  active_count: number
+  success_count: number
+  partial_count: number
+  failed_count: number
+  cancelled_count: number
+  draft_count: number
+  lifetime_success_users: number
+  lifetime_fail_users: number
+  experiment_tasks: number
+  recent_sends: {
+    window_hours: number
+    total: number
+    success: number
+    failed: number
+    success_rate: number
+  }
+  recent_campaigns: OverviewCampaign[]
+}
+
+export type OverviewCampaign = {
+  id: number
+  biz_id: string
+  biz_scene: string
+  title: string
+  channel: ChannelType
+  channels?: ChannelType[]
+  status: TaskStatus
+  priority: Priority
+  total_count: number
+  success_count: number
+  fail_count: number
+  experiment_id?: string
+  created_at: string
+  finished_at?: string
+}
+
+export type NotificationLevel = 'info' | 'success' | 'warning' | 'error' | string
+export type NotificationType = 'task_finished' | string
+
+export type Notification = {
+  id: number
+  title: string
+  body: string
+  level: NotificationLevel
+  type: NotificationType
+  related_task_id?: number
+  read_at?: string
+  created_by?: string
+  created_at: string
+}
+
+export type AuditLog = {
+  id: number
+  operator: string
+  action: string
+  resource_type?: string
+  resource_id?: string
+  method: string
+  path: string
+  ip?: string
+  detail?: string
+  success: boolean
+  created_at: string
+}
+
+export type AuditLogListResult = {
+  total: number
+  page: number
+  page_size: number
+  items: AuditLog[]
+}
+
+export type NotificationListResult = {
+  total: number
+  page: number
+  page_size: number
+  items: Notification[]
+}
+

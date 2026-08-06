@@ -17,6 +17,7 @@ import {
   Toast,
 } from '../components/ui'
 import { channelLabel } from '../lib/channels'
+import { BIZ_SCENE_OPTIONS } from '../lib/labels'
 
 const DEFAULT_ROUTES_JSON = `[
   {"when":{"var":"vip","op":"eq","value":"true"},"channels":["sms","app_push"]},
@@ -214,8 +215,8 @@ export function CampaignsPage() {
         <form onSubmit={onCreate}>
           <PanelTitle>活动参数</PanelTitle>
           <Field
-            label="业务幂等键 biz_id"
-            hint="全局唯一。相同 biz_id 重复提交会返回已有活动，避免误建重复投放。"
+            label="业务幂等键"
+            hint="全局唯一。相同键重复提交会返回已有活动，避免误建重复投放。"
           >
             <Input
               required
@@ -234,22 +235,51 @@ export function CampaignsPage() {
             />
           </Field>
           <Field
-            label="业务场景 biz_scene"
-            hint="决定人群 Provider 路由，并可能映射到高优队列。本地联调可用 demo；事务类可用 txn / otp 等。"
+            label="业务场景"
+            hint={
+              BIZ_SCENE_OPTIONS.find((o) => o.value === form.biz_scene)?.hint ||
+              '决定人群 Provider 路由，并可能映射到高优队列。也可手动输入自定义场景。'
+            }
           >
-            <Input
+            <Select
               required
-              value={form.biz_scene}
-              onChange={(e) => setForm({ ...form, biz_scene: e.target.value })}
-              placeholder="demo"
-            />
+              value={
+                BIZ_SCENE_OPTIONS.some((o) => o.value === form.biz_scene)
+                  ? form.biz_scene
+                  : '__custom__'
+              }
+              onChange={(e) => {
+                const v = e.target.value
+                if (v === '__custom__') {
+                  setForm({ ...form, biz_scene: '' })
+                  return
+                }
+                setForm({ ...form, biz_scene: v })
+              }}
+            >
+              {BIZ_SCENE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+              <option value="__custom__">自定义…</option>
+            </Select>
+            {!BIZ_SCENE_OPTIONS.some((o) => o.value === form.biz_scene) ? (
+              <Input
+                className="mt-2"
+                required
+                value={form.biz_scene}
+                onChange={(e) => setForm({ ...form, biz_scene: e.target.value })}
+                placeholder="输入自定义场景"
+              />
+            ) : null}
           </Field>
           <Field
-            label="模板 code"
+            label="模板编码"
             hint={
               templates.length === 0
                 ? '暂无已通过模板，请先到模板中心创建并审核通过。'
-                : '必须选择 status=approved 的模板；实际推送内容取该模板快照。'
+                : '必须选择已审核通过的模板；实际推送内容取该模板快照。'
             }
           >
             <Select
@@ -268,7 +298,7 @@ export function CampaignsPage() {
             </Select>
           </Field>
           <Field
-            label="人群引用 audience_ref"
+            label="人群引用"
             hint="传给人群服务的人群标识。Demo 源下任意非空字符串即可，常与场景配合使用。"
           >
             <Input
@@ -368,7 +398,7 @@ export function CampaignsPage() {
           </Field>
           {form.channel_mode === 'conditional' ? (
             <Field
-              label="条件路由 channel_routes"
+              label="条件路由规则"
               hint="JSON 数组。按序匹配 when；无 when 为默认兜底。op: eq|ne|in|gt|gte|lt|lte|exists|not_exists。"
             >
               <Textarea
@@ -380,7 +410,7 @@ export function CampaignsPage() {
           ) : null}
           {form.channel_mode === 'cost_priority' ? (
             <Field
-              label="渠道成本 channel_costs"
+              label="渠道成本"
               hint="JSON 对象，数值越低越优先。未填写的渠道用系统默认成本。"
             >
               <Textarea
@@ -391,8 +421,8 @@ export function CampaignsPage() {
             </Field>
           ) : null}
           <Field
-            label="最大降级次数 max_fallback"
-            hint="仅 fallback / cost_priority / 条件路由多渠降级。不含首渠；0 或不填表示不限制。"
+            label="最大降级次数"
+            hint="仅降级 / 成本优先 / 条件路由多渠降级。不含首渠；0 或不填表示不限制。"
           >
             <Input
               type="number"
@@ -402,21 +432,21 @@ export function CampaignsPage() {
               placeholder="0 = 不限制"
             />
           </Field>
-          <Field label="过期时间 expire_at" hint="可选。超时消息标记 expired，不再调渠道。">
+          <Field label="过期时间" hint="可选。超时消息标记为已过期，不再调渠道。">
             <Input
               type="datetime-local"
               value={form.expire_at}
               onChange={(e) => setForm({ ...form, expire_at: e.target.value })}
             />
           </Field>
-          <Field label="实验 ID" hint="可选。启用后按对照组比例跳过 control 用户；分析页可看分组指标。">
+          <Field label="实验 ID" hint="可选。启用后按对照组比例跳过对照组用户；分析页可看分组指标。">
             <Input
               value={form.experiment_id}
               onChange={(e) => setForm({ ...form, experiment_id: e.target.value })}
               placeholder="exp_welcome_v1"
             />
           </Field>
-          <Field label="实验盐 experiment_salt" hint="抽样哈希盐；空则仅用 user_id。">
+          <Field label="实验盐" hint="抽样哈希盐；空则仅用用户 ID。">
             <Input
               value={form.experiment_salt}
               onChange={(e) => setForm({ ...form, experiment_salt: e.target.value })}
@@ -434,19 +464,19 @@ export function CampaignsPage() {
           </Field>
           <Field
             label="优先级"
-            hint="high 走高优队列，适合事务/验证码；normal 为普通营销队列。不选时也可能按 biz_scene 自动映射。"
+            hint="高优适合事务/验证码；普通为营销队列。不选时也可能按业务场景自动映射。"
           >
             <Select
               value={form.priority}
               onChange={(e) => setForm({ ...form, priority: e.target.value as Priority })}
             >
-              <option value="normal">normal · 普通</option>
-              <option value="high">high · 高优</option>
+              <option value="normal">普通</option>
+              <option value="high">高优</option>
             </Select>
           </Field>
           <Field
-            label="入队节奏 pace_qps"
-            hint="可选。限制本活动向 MQ 入队的大致 QPS，用于削峰；留空则用系统默认节奏。"
+            label="入队节奏"
+            hint="可选。限制本活动向消息队列入队的大致 QPS，用于削峰；留空则用系统默认节奏。"
           >
             <Input
               type="number"
@@ -457,7 +487,7 @@ export function CampaignsPage() {
             />
           </Field>
           <Field
-            label="创建人 created_by"
+            label="创建人"
             hint="审计字段，写入活动记录，便于列表按负责人筛选。默认取当前登录用户。"
           >
             <Input
@@ -483,6 +513,7 @@ export function CampaignsPage() {
               variant="ghost"
               type="button"
               disabled={busy}
+              title="估算目标人数与命中情况（原始→过滤→AB→可达），不创建活动、不发送。可能未扫完全部人群。"
               onClick={() => {
                 void (async () => {
                   setBusy(true)
@@ -513,6 +544,7 @@ export function CampaignsPage() {
               variant="ghost"
               type="button"
               disabled={busy || !form.template_id}
+              title="检查模板可用性、变量 Schema、内嵌人群试算与容量/费用提示，不创建活动、不发送。"
               onClick={() => {
                 void (async () => {
                   setBusy(true)
@@ -544,6 +576,7 @@ export function CampaignsPage() {
               variant="ghost"
               type="button"
               disabled={busy || !form.template_id}
+              title="按样本变量渲染最终标题/正文（含分渠内容），不调渠道、不写流水。"
               onClick={() => {
                 void (async () => {
                   setBusy(true)
@@ -573,6 +606,7 @@ export function CampaignsPage() {
               variant="ghost"
               type="button"
               disabled={busy || !form.template_id}
+              title="向测试用户真实调用渠道发一条，写测试流水（不计入活动统计），用于验证通路。"
               onClick={() => {
                 void (async () => {
                   setBusy(true)
@@ -588,7 +622,7 @@ export function CampaignsPage() {
                       send: true,
                     })
                     setDryRunText(JSON.stringify(dr, null, 2))
-                    setMsg(dr.sent ? '测试发送已发出（is_test）' : '测试发送未成功')
+                    setMsg(dr.sent ? '测试发送已发出（测试流水）' : '测试发送未成功')
                   } catch (e) {
                     setErr(e instanceof ApiError ? e.message : '测试发送失败')
                   } finally {
@@ -600,6 +634,9 @@ export function CampaignsPage() {
               测试发送
             </Button>
           </BtnRow>
+          <p className="mb-3 text-xs text-muted">
+            悬停按钮可看说明：试算/预检/渲染均不真正投放；测试发送会真实调渠道并记测试流水。
+          </p>
           {estimateText ? (
             <pre className="mb-3 max-h-40 overflow-auto rounded-lg bg-paper-deep p-3 text-xs">{estimateText}</pre>
           ) : null}

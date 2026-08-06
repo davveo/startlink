@@ -165,7 +165,7 @@ export function RecordsPage() {
               placeholder="task id"
             />
           </Field>
-          <Field label="用户 ID" hint="精确匹配 push_records.user_id。">
+          <Field label="用户 ID" hint="精确匹配流水中的用户 ID。">
             <Input
               className="font-mono text-sm"
               value={userFilter}
@@ -176,17 +176,17 @@ export function RecordsPage() {
           <Field label="状态">
             <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
               <option value="">全部</option>
-              <option value="queued">queued</option>
-              <option value="sending">sending</option>
-              <option value="sent">sent</option>
-              <option value="delivered">delivered</option>
-              <option value="clicked">clicked</option>
-              <option value="failed">failed</option>
-              <option value="suppressed">suppressed</option>
-              <option value="unreachable">unreachable</option>
+              <option value="queued">已入队</option>
+              <option value="sending">发送中</option>
+              <option value="sent">已发送</option>
+              <option value="delivered">已送达</option>
+              <option value="clicked">已点击</option>
+              <option value="failed">失败</option>
+              <option value="suppressed">已抑制</option>
+              <option value="unreachable">不可达</option>
             </Select>
           </Field>
-          <Field label="渠道" hint="如 inbox / sms / app_push。">
+          <Field label="渠道" hint="如站内信 / 短信 / App 推送。">
             <Input
               className="font-mono text-sm"
               value={channelFilter}

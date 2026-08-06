@@ -1,4 +1,6 @@
+import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { api } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import { cn } from '../lib/cn'
 import { Button } from './ui'
@@ -7,6 +9,8 @@ const navItems = [
   { to: '/', end: true, label: '概览' },
   { to: '/tasks', label: '任务' },
   { to: '/templates', label: '模板' },
+  { to: '/notifications', label: '通知' },
+  { to: '/audit-logs', label: '审计日志' },
 ] as const
 
 const navClass = ({ isActive }: { isActive: boolean }) =>
@@ -20,6 +24,64 @@ const navClass = ({ isActive }: { isActive: boolean }) =>
 export function Layout() {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
+  const [unread, setUnread] = useState(0)
+
+  useEffect(() => {
+    let alive = true
+    const refresh = async () => {
+      try {
+        const res = await api.unreadNotificationCount()
+        if (alive) setUnread(res.count ?? 0)
+      } catch {
+        /* 未登录或接口暂不可用时忽略角标 */
+      }
+    }
+
+    void refresh()
+
+    // SSE 为主；断线由 EventSource 自动重连，重连时再拉一次未读作兜底
+    let es: EventSource | null = null
+    let softTimer: number | undefined
+
+    const connect = () => {
+      es?.close()
+      es = new EventSource('/api/v1/notifications/stream', { withCredentials: true })
+      const onPayload = (ev: MessageEvent) => {
+        try {
+          const data = JSON.parse(String(ev.data)) as { unread_count?: number; type?: string }
+          if (typeof data.unread_count === 'number' && alive) {
+            setUnread(data.unread_count)
+          }
+          if (data.type === 'notification') {
+            window.dispatchEvent(new Event('starlink:notifications-changed'))
+          }
+        } catch {
+          /* ignore malformed */
+        }
+      }
+      es.addEventListener('notification', onPayload)
+      es.addEventListener('unread', onPayload)
+      es.onopen = () => {
+        void refresh()
+      }
+      es.onerror = () => {
+        // 浏览器会自动重连；保留弱轮询作 scheduler 跨进程兜底
+      }
+    }
+    connect()
+
+    // 弱化兜底：2 分钟拉一次（SSE 正常时几乎无感）
+    softTimer = window.setInterval(() => void refresh(), 120_000)
+
+    const onChanged = () => void refresh()
+    window.addEventListener('starlink:notifications-changed', onChanged)
+    return () => {
+      alive = false
+      es?.close()
+      if (softTimer) window.clearInterval(softTimer)
+      window.removeEventListener('starlink:notifications-changed', onChanged)
+    }
+  }, [])
 
   async function onLogout() {
     await logout()
@@ -39,7 +101,14 @@ export function Layout() {
         <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto px-3 py-4">
           {navItems.map((item) => (
             <NavLink key={item.to} to={item.to} end={'end' in item ? item.end : undefined} className={navClass}>
-              {item.label}
+              <span className="inline-flex w-full items-center justify-between gap-2">
+                <span>{item.label}</span>
+                {item.to === '/notifications' && unread > 0 ? (
+                  <span className="min-w-[1.25rem] rounded-full bg-teal px-1.5 py-0.5 text-center text-[10px] font-bold leading-none text-ink">
+                    {unread > 99 ? '99+' : unread}
+                  </span>
+                ) : null}
+              </span>
             </NavLink>
           ))}
         </nav>

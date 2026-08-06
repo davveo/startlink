@@ -1,5 +1,34 @@
 package domain
 
+// TaskStatusLabelZH 任务状态展示名
+func TaskStatusLabelZH(s TaskStatus) string {
+	switch s {
+	case TaskStatusDraft:
+		return "草稿"
+	case TaskStatusPending:
+		return "待执行"
+	case TaskStatusRunning:
+		return "进行中"
+	case TaskStatusPaused:
+		return "已暂停"
+	case TaskStatusSuccess:
+		return "成功"
+	case TaskStatusPartial:
+		return "部分成功"
+	case TaskStatusFailed:
+		return "失败"
+	case TaskStatusCancelled:
+		return "已取消"
+	case TaskStatusRetrying:
+		return "重试中"
+	default:
+		if s == "" {
+			return "-"
+		}
+		return string(s)
+	}
+}
+
 // ChannelLabelZH 渠道展示名（运营导出 / 控制台）
 func ChannelLabelZH(c ChannelType) string {
 	switch c {

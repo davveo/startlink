@@ -31,6 +31,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		response.Fail(c, errcode.Unauthorized)
 		return
 	}
+	c.Set("audit_login_user", req.Username)
 	h.sessions.IssueCookie(c, req.Username)
 	response.OK(c, gin.H{"username": req.Username})
 }

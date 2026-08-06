@@ -205,6 +205,20 @@ export function Th({ children, className }: { children?: ReactNode; className?: 
   )
 }
 
-export function Td({ children, className }: { children?: ReactNode; className?: string }) {
-  return <td className={cn('border-b border-line px-2 py-3 align-top', className)}>{children}</td>
+export function Td({
+  children,
+  className,
+  colSpan,
+  title,
+}: {
+  children?: ReactNode
+  className?: string
+  colSpan?: number
+  title?: string
+}) {
+  return (
+    <td colSpan={colSpan} title={title} className={cn('border-b border-line px-2 py-3 align-top', className)}>
+      {children}
+    </td>
+  )
 }

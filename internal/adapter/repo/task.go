@@ -114,6 +114,8 @@ INNER JOIN (
 		&domain.TemplateVersion{},
 		&domain.ExportJob{},
 		&domain.ExperimentAssignment{},
+		&domain.Notification{},
+		&domain.AuditLog{},
 	)
 }
 
@@ -705,6 +707,46 @@ func (r *TaskRepo) SummarizeSubTasks(ctx context.Context, mainTaskID uint64) ([]
 	return out, nil
 }
 
+func (r *TaskRepo) CountMainTasksByStatus(ctx context.Context) (map[domain.TaskStatus]int64, error) {
+	type row struct {
+		Status domain.TaskStatus
+		Cnt    int64
+	}
+	var rows []row
+	err := r.db.WithContext(ctx).Model(&domain.MainTask{}).
+		Select("status, COUNT(*) AS cnt").
+		Group("status").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[domain.TaskStatus]int64, len(rows))
+	for _, row := range rows {
+		out[row.Status] = row.Cnt
+	}
+	return out, nil
+}
+
+func (r *TaskRepo) SumMainTaskUserCounts(ctx context.Context) (success, fail int64, err error) {
+	type row struct {
+		Success int64
+		Fail    int64
+	}
+	var r0 row
+	err = r.db.WithContext(ctx).Model(&domain.MainTask{}).
+		Select("COALESCE(SUM(success_count), 0) AS success, COALESCE(SUM(fail_count), 0) AS fail").
+		Scan(&r0).Error
+	return r0.Success, r0.Fail, err
+}
+
+func (r *TaskRepo) CountMainTasksWithExperiment(ctx context.Context) (int64, error) {
+	var n int64
+	err := r.db.WithContext(ctx).Model(&domain.MainTask{}).
+		Where("experiment_id IS NOT NULL AND experiment_id <> ''").
+		Count(&n).Error
+	return n, err
+}
+
 // PushRepo 推送流水
 type PushRepo struct {
 	db *gorm.DB
@@ -1277,4 +1319,24 @@ GROUP BY experiment_group, status
 	}
 	out.Groups = sorted
 	return out, nil
+}
+
+func (r *PushRepo) CountRecentSends(ctx context.Context, since time.Time) (port.SendStats, error) {
+	type row struct {
+		Total   int64
+		Success int64
+		Failed  int64
+	}
+	var r0 row
+	err := r.db.WithContext(ctx).Model(&domain.PushRecord{}).
+		Select(`
+			COUNT(*) AS total,
+			COALESCE(SUM(CASE WHEN status IN ('sent','delivered','clicked') THEN 1 ELSE 0 END), 0) AS success,
+			COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed`).
+		Where("created_at >= ? AND is_test = ?", since, false).
+		Scan(&r0).Error
+	if err != nil {
+		return port.SendStats{}, err
+	}
+	return port.SendStats{Total: r0.Total, Success: r0.Success, Failed: r0.Failed}, nil
 }

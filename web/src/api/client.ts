@@ -315,4 +315,44 @@ export const api = {
   getExport: (jobId: number) => request<import('./types').ExportJob>(`/api/v1/exports/${jobId}`),
 
   exportSyncUrl: (id: number, kind = 'records') => `/api/v1/campaigns/${id}/export?kind=${kind}`,
+
+  getOverview: () => request<import('./types').OverviewView>('/api/v1/overview'),
+
+  listNotifications: (q?: { unread_only?: boolean; page?: number; page_size?: number }) => {
+    const params = new URLSearchParams()
+    if (q?.unread_only) params.set('unread_only', '1')
+    params.set('page', String(q?.page ?? 1))
+    params.set('page_size', String(q?.page_size ?? 20))
+    return request<import('./types').NotificationListResult>(`/api/v1/notifications?${params}`)
+  },
+
+  unreadNotificationCount: () =>
+    request<{ count: number }>('/api/v1/notifications/unread-count'),
+
+  markNotificationRead: (id: number) =>
+    request<{ ok: boolean }>(`/api/v1/notifications/${id}/read`, { method: 'POST', body: '{}' }),
+
+  markAllNotificationsRead: () =>
+    request<{ updated: number }>('/api/v1/notifications/read-all', { method: 'POST', body: '{}' }),
+
+  listAuditLogs: (q?: {
+    operator?: string
+    action?: string
+    success?: boolean
+    since?: string
+    until?: string
+    page?: number
+    page_size?: number
+  }) => {
+    const params = new URLSearchParams()
+    if (q?.operator) params.set('operator', q.operator)
+    if (q?.action) params.set('action', q.action)
+    if (q?.success === true) params.set('success', '1')
+    if (q?.success === false) params.set('success', '0')
+    if (q?.since) params.set('since', q.since)
+    if (q?.until) params.set('until', q.until)
+    params.set('page', String(q?.page ?? 1))
+    params.set('page_size', String(q?.page_size ?? 20))
+    return request<import('./types').AuditLogListResult>(`/api/v1/audit-logs?${params}`)
+  },
 }

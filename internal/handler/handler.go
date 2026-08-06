@@ -179,6 +179,15 @@ func (h *CampaignHandler) ListChannels(c *gin.Context) {
 	response.OK(c, gin.H{"channels": h.channels.List()})
 }
 
+func (h *CampaignHandler) Overview(c *gin.Context) {
+	view, err := h.svc.Overview(c.Request.Context())
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+	response.OK(c, view)
+}
+
 type CallbackHandler struct {
 	svc *callback.Service
 }

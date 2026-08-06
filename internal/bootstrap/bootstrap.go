@@ -18,18 +18,20 @@ import (
 
 // Infra 公共基础设施装配
 type Infra struct {
-	Cfg       *config.Config
-	DB        *gorm.DB
-	Redis     *redisx.Client
-	MQ        port.PriorityBroker // 可插拔：redis_stream / rocketmq / memory / 自定义
-	Tasks     *repo.TaskRepo
-	Push      *repo.PushRepo
-	AggCache  *redisx.Aggregator
-	Limiter   port.ChannelLimiter
-	Channels  *channel.Registry
-	Audience  *audience.Registry
-	Webhook   *webhook.Client
-	Templates *repo.TemplateRepo
+	Cfg           *config.Config
+	DB            *gorm.DB
+	Redis         *redisx.Client
+	MQ            port.PriorityBroker // 可插拔：redis_stream / rocketmq / memory / 自定义
+	Tasks         *repo.TaskRepo
+	Push          *repo.PushRepo
+	Notifications *repo.NotificationRepo
+	AuditLogs     *repo.AuditRepo
+	AggCache      *redisx.Aggregator
+	Limiter       port.ChannelLimiter
+	Channels      *channel.Registry
+	Audience      *audience.Registry
+	Webhook       *webhook.Client
+	Templates     *repo.TemplateRepo
 }
 
 func NewInfra(cfgPath string) (*Infra, error) {
@@ -107,17 +109,19 @@ func NewInfra(cfgPath string) (*Infra, error) {
 	}
 
 	return &Infra{
-		Cfg:       cfg,
-		DB:        db,
-		Redis:     rdb,
-		MQ:        broker,
-		Tasks:     repo.NewTaskRepo(db),
-		Push:      repo.NewPushRepo(db),
-		AggCache:  redisx.NewAggregator(rdb),
-		Limiter:   limiter,
-		Channels:  chReg,
-		Audience:  audReg,
-		Webhook:   wh,
-		Templates: repo.NewTemplateRepo(db),
+		Cfg:           cfg,
+		DB:            db,
+		Redis:         rdb,
+		MQ:            broker,
+		Tasks:         repo.NewTaskRepo(db),
+		Push:          repo.NewPushRepo(db),
+		Notifications: repo.NewNotificationRepo(db),
+		AuditLogs:     repo.NewAuditRepo(db),
+		AggCache:      redisx.NewAggregator(rdb),
+		Limiter:       limiter,
+		Channels:      chReg,
+		Audience:      audReg,
+		Webhook:       wh,
+		Templates:     repo.NewTemplateRepo(db),
 	}, nil
 }

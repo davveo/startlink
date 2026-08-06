@@ -154,24 +154,24 @@ export function TasksPage() {
               }}
             >
               <option value="">全部</option>
-              <option value="draft">draft</option>
-              <option value="pending">pending</option>
-              <option value="running">running</option>
-              <option value="paused">paused</option>
-              <option value="success">success</option>
-              <option value="partial">partial</option>
-              <option value="failed">failed</option>
-              <option value="cancelled">cancelled</option>
-              <option value="retrying">retrying</option>
+              <option value="draft">草稿</option>
+              <option value="pending">待执行</option>
+              <option value="running">进行中</option>
+              <option value="paused">已暂停</option>
+              <option value="success">成功</option>
+              <option value="partial">部分成功</option>
+              <option value="failed">失败</option>
+              <option value="cancelled">已取消</option>
+              <option value="retrying">重试中</option>
             </Select>
           </Field>
-          <Field label="biz_scene">
+          <Field label="业务场景">
             <Input value={bizScene} onChange={(e) => setBizScene(e.target.value)} placeholder="demo" />
           </Field>
-          <Field label="channel">
+          <Field label="渠道">
             <Input value={channel} onChange={(e) => setChannel(e.target.value)} placeholder="app_push" />
           </Field>
-          <Field label="priority">
+          <Field label="优先级">
             <Select
               value={priority}
               onChange={(e) => {
@@ -180,14 +180,14 @@ export function TasksPage() {
               }}
             >
               <option value="">全部</option>
-              <option value="high">high</option>
-              <option value="normal">normal</option>
+              <option value="high">高优</option>
+              <option value="normal">普通</option>
             </Select>
           </Field>
-          <Field label="created_by">
+          <Field label="创建人">
             <Input value={createdBy} onChange={(e) => setCreatedBy(e.target.value)} placeholder={user?.username || 'admin'} />
           </Field>
-          <Field label="关键词（biz_id / title）">
+          <Field label="关键词（幂等键 / 标题）">
             <Input
               value={keyword}
               onChange={(e) => setKeyword(e.target.value)}
@@ -228,7 +228,7 @@ export function TasksPage() {
             <tr>
               <Th />
               <Th>ID</Th>
-              <Th>标题 / biz_id</Th>
+              <Th>标题 / 幂等键</Th>
               <Th>场景</Th>
               <Th>渠道</Th>
               <Th>状态</Th>

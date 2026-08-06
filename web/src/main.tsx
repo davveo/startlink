@@ -4,9 +4,11 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { AuthProvider } from './auth/AuthContext'
 import { RequireAuth } from './auth/RequireAuth'
 import { Layout } from './components/Layout'
+import { AuditLogsPage } from './pages/AuditLogsPage'
 import { CampaignsPage } from './pages/CampaignsPage'
 import { HomePage } from './pages/HomePage'
 import { LoginPage } from './pages/LoginPage'
+import { NotificationsPage } from './pages/NotificationsPage'
 import { OpsPage } from './pages/OpsPage'
 import { ProgressPage } from './pages/ProgressPage'
 import { RecordsPage } from './pages/RecordsPage'
@@ -33,6 +35,8 @@ createRoot(document.getElementById('root')!).render(
             <Route path="tasks" element={<TasksPage />} />
             <Route path="tasks/:id/subtasks" element={<SubTasksPage />} />
             <Route path="progress" element={<ProgressPage />} />
+            <Route path="notifications" element={<NotificationsPage />} />
+            <Route path="audit-logs" element={<AuditLogsPage />} />
             <Route path="ops" element={<OpsPage />} />
             <Route path="ops/:id/records" element={<RecordsPage />} />
             <Route path="ops/:id" element={<OpsPage />} />

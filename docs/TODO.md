@@ -121,6 +121,13 @@
   - `GET /api/v1/campaigns/:id/failures`（按 channel/provider/error_msg 聚合计数；时间窗/可重试标签可后续增强）
 - [x] 结果明细与异步导出：提供用户级流水查询，大结果集导出到对象存储
   - `GET .../records`；同步 `GET .../export`；异步 `POST .../exports` + `GET /exports/:id[/download]`（当前落本地 `data/exports`，可换对象存储）
+- [x] 运营概览：活动状态分布、近 24h 发送量/成功率、最近活动列表
+  - `GET /api/v1/overview`；前端「概览」页
+- [x] 消息通知中心：任务终态（成功/部分成功/失败/取消）写站内通知；列表/未读数/已读
+  - 表 `notifications`；`GET /api/v1/notifications`、`/unread-count`；`POST .../:id/read`、`/read-all`
+  - Aggregator 终态 + Cancel + 拆分失败写入；前端侧栏角标与「通知」页
+  - SSE：`GET /api/v1/notifications/stream`（session 鉴权）；Create/已读经 Redis pub/sub → 进程内 Hub fan-out；前端 EventSource + 重连拉未读；弱化 2min 兜底轮询
+- [x] 审计日志：写操作中间件记录（非 GET）；表 `audit_logs`；`GET /api/v1/audit-logs`；侧栏「审计日志」页
 - [ ] DLQ / PEL 运维 API：查询、查看错误、单条/批量重投和丢弃；人工操作写审计日志（替代纯 redis-cli）
 
 ---

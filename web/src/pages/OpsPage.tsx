@@ -114,14 +114,14 @@ export function OpsPage() {
           <Panel className="mt-4">
             <PanelTitle>投递漏斗（流水状态）</PanelTitle>
             <div className="grid gap-3 md:grid-cols-4">
-              <Stat label="queued">{p?.queued ?? 0}</Stat>
-              <Stat label="sending">{p?.sending ?? 0}</Stat>
-              <Stat label="sent">{p?.sent ?? 0}</Stat>
-              <Stat label="delivered">{p?.delivered ?? 0}</Stat>
-              <Stat label="clicked">{p?.clicked ?? 0}</Stat>
-              <Stat label="failed">{p?.failed ?? 0}</Stat>
-              <Stat label="suppressed">{p?.suppressed ?? 0}</Stat>
-              <Stat label="unreachable">{p?.unreachable ?? 0}</Stat>
+              <Stat label="已入队">{p?.queued ?? 0}</Stat>
+              <Stat label="发送中">{p?.sending ?? 0}</Stat>
+              <Stat label="已发送">{p?.sent ?? 0}</Stat>
+              <Stat label="已送达">{p?.delivered ?? 0}</Stat>
+              <Stat label="已点击">{p?.clicked ?? 0}</Stat>
+              <Stat label="失败">{p?.failed ?? 0}</Stat>
+              <Stat label="已抑制">{p?.suppressed ?? 0}</Stat>
+              <Stat label="不可达">{p?.unreachable ?? 0}</Stat>
             </div>
           </Panel>
         </>
@@ -132,7 +132,7 @@ export function OpsPage() {
           实验指标看板
           {experiment?.experiment_id ? (
             <span className="ml-2 text-sm font-normal text-muted">
-              experiment_id=<Mono>{experiment.experiment_id}</Mono>
+              实验 <Mono>{experiment.experiment_id}</Mono>
             </span>
           ) : null}
         </PanelTitle>
@@ -145,10 +145,10 @@ export function OpsPage() {
               <Th>成功</Th>
               <Th>失败</Th>
               <Th>抑制</Th>
-              <Th>sent</Th>
-              <Th>open/delivered</Th>
-              <Th>click</Th>
-              <Th>failed 流水</Th>
+              <Th>已发送</Th>
+              <Th>送达</Th>
+              <Th>点击</Th>
+              <Th>失败流水</Th>
               <Th>成功率</Th>
             </tr>
           </thead>

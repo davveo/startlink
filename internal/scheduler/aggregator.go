@@ -15,10 +15,11 @@ type Aggregator struct {
 	push     port.PushRepository
 	cache    port.AggregatorCache
 	notifier port.Notifier
+	inbox    port.NotificationRepository
 }
 
-func NewAggregator(tasks port.TaskRepository, cache port.AggregatorCache, notifier port.Notifier, push port.PushRepository) *Aggregator {
-	return &Aggregator{tasks: tasks, push: push, cache: cache, notifier: notifier}
+func NewAggregator(tasks port.TaskRepository, cache port.AggregatorCache, notifier port.Notifier, push port.PushRepository, inbox port.NotificationRepository) *Aggregator {
+	return &Aggregator{tasks: tasks, push: push, cache: cache, notifier: notifier, inbox: inbox}
 }
 
 // OnSubFinished 子任务完成后聚合；按 subTaskID 幂等，重复调用不会虚高 done
@@ -123,14 +124,15 @@ func (a *Aggregator) refreshUserCounts(ctx context.Context, mainTaskID uint64) e
 }
 
 func (a *Aggregator) notifyFinished(mainTaskID uint64, status domain.TaskStatus) {
-	if a.notifier == nil {
-		return
-	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		main, err := a.tasks.GetMainTask(ctx, mainTaskID)
 		if err != nil {
+			return
+		}
+		a.emitInbox(ctx, main, status)
+		if a.notifier == nil {
 			return
 		}
 		event := domain.WebhookEvent{
@@ -153,4 +155,29 @@ func (a *Aggregator) notifyFinished(mainTaskID uint64, status domain.TaskStatus)
 			slog.Warn("webhook notify failed", "task_id", mainTaskID, "err", err)
 		}
 	}()
+}
+
+// EmitTaskTerminal 主任务进入终态时写站内通知（供拆分失败等路径复用）
+func (a *Aggregator) EmitTaskTerminal(ctx context.Context, mainTaskID uint64, status domain.TaskStatus) {
+	if a == nil {
+		return
+	}
+	main, err := a.tasks.GetMainTask(ctx, mainTaskID)
+	if err != nil {
+		return
+	}
+	a.emitInbox(ctx, main, status)
+}
+
+func (a *Aggregator) emitInbox(ctx context.Context, main *domain.MainTask, status domain.TaskStatus) {
+	if a.inbox == nil || main == nil {
+		return
+	}
+	n := domain.NewTaskTerminalNotification(main, status)
+	if n == nil {
+		return
+	}
+	if err := a.inbox.Create(ctx, n); err != nil {
+		slog.Warn("inbox notification failed", "task_id", main.ID, "status", status, "err", err)
+	}
 }

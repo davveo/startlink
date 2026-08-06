@@ -24,6 +24,7 @@ type Service struct {
 	pushRepo       port.PushRepository
 	cache          port.AggregatorCache
 	notifier       *webhook.Client
+	inbox          port.NotificationRepository
 	templates      port.TemplateRepository
 	limiter        port.ChannelLimiter
 	batchSize      int
@@ -39,6 +40,7 @@ type Deps struct {
 	PushRepo       port.PushRepository
 	Cache          port.AggregatorCache
 	Notifier       *webhook.Client
+	Inbox          port.NotificationRepository
 	Templates      port.TemplateRepository
 	Limiter        port.ChannelLimiter
 	BatchSize      int
@@ -63,6 +65,7 @@ func NewService(deps Deps) *Service {
 		pushRepo:       deps.PushRepo,
 		cache:          deps.Cache,
 		notifier:       deps.Notifier,
+		inbox:          deps.Inbox,
 		templates:      deps.Templates,
 		limiter:        deps.Limiter,
 		batchSize:      bs,
@@ -765,6 +768,7 @@ func (s *Service) Cancel(ctx context.Context, id uint64) (*CancelResult, error) 
 	fresh, _ := s.Get(ctx, id)
 	if fresh != nil {
 		s.fireWebhook(fresh)
+		s.emitInbox(ctx, fresh, domain.TaskStatusCancelled)
 	}
 	return &CancelResult{
 		TaskID:        task.ID,
@@ -1029,6 +1033,19 @@ func (s *Service) fireWebhook(task *domain.MainTask) {
 		Timestamp:    time.Now(),
 	}
 	s.notifier.NotifyAsync(url, event)
+}
+
+func (s *Service) emitInbox(ctx context.Context, task *domain.MainTask, status domain.TaskStatus) {
+	if s.inbox == nil || task == nil {
+		return
+	}
+	n := domain.NewTaskTerminalNotification(task, status)
+	if n == nil {
+		return
+	}
+	if err := s.inbox.Create(ctx, n); err != nil {
+		slog.Warn("inbox notification failed", "task_id", task.ID, "status", status, "err", err)
+	}
 }
 
 // NotifyFinished 供调度聚合器调用

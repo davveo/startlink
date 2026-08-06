@@ -71,7 +71,7 @@ func TestOnSubFinishedIdempotent(t *testing.T) {
 	tasks := &stubTasks{main: &domain.MainTask{
 		ID: 1, Status: domain.TaskStatusRunning, SubTaskTotal: 10, Version: 1,
 	}}
-	agg := NewAggregator(tasks, cache, nil, nil)
+	agg := NewAggregator(tasks, cache, nil, nil, nil)
 
 	ctx := context.Background()
 	if err := agg.OnSubFinished(ctx, 1, 42, 10, 0); err != nil {

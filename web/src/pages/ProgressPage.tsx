@@ -19,6 +19,7 @@ import {
   Stat,
   Toast,
 } from '../components/ui'
+import { channelLabel, channelModeLabel, priorityLabel } from '../lib/labels'
 
 export function ProgressPage() {
   const [searchParams, setSearchParams] = useSearchParams()
@@ -121,7 +122,7 @@ export function ProgressPage() {
     <div>
       <PageHead
         title="活动进度"
-        description="按 task_id 或 biz_id 查询进度，支持暂停、恢复、取消与失败重推。"
+        description="按任务 ID 或业务幂等键查询进度，支持暂停、恢复、取消与失败重推。"
       />
 
       {err ? <Toast kind="error">{err}</Toast> : null}
@@ -130,7 +131,7 @@ export function ProgressPage() {
       <Panel>
         <PanelTitle>查询进度</PanelTitle>
         <form onSubmit={onLookup} className="max-w-xl">
-          <Field label="task_id 或 biz_id">
+          <Field label="任务 ID 或业务幂等键">
             <Input
               className="font-mono text-sm"
               value={lookup}
@@ -175,10 +176,13 @@ export function ProgressPage() {
               <Stat label="不可达">{progress.unreachable_users ?? 0}</Stat>
               <Stat label="取消">{progress.cancelled_users}</Stat>
             </div>
-            <p className="mt-4 font-mono text-sm text-muted">
-              task=#{progress.task_id} · {progress.biz_id} · {progress.channel} ·{' '}
-              {(progress.channels ?? []).join(',') || '-'} · {progress.channel_mode} ·{' '}
-              {progress.priority}
+            <p className="mt-4 text-sm text-muted">
+              任务 #{progress.task_id} · {progress.biz_id} ·{' '}
+              {channelLabel(progress.channel)}
+              {(progress.channels ?? []).length > 1
+                ? `（${(progress.channels ?? []).map(channelLabel).join('、')}）`
+                : ''}{' '}
+              · {channelModeLabel(progress.channel_mode)} · {priorityLabel(progress.priority)}
             </p>
             <BtnRow className="mt-4">
               <Button
@@ -235,7 +239,7 @@ export function ProgressPage() {
             </BtnRow>
           </div>
         ) : (
-          <Empty>输入 task_id 或 biz_id 后查询进度</Empty>
+          <Empty>输入任务 ID 或业务幂等键后查询进度</Empty>
         )}
       </Panel>
     </div>

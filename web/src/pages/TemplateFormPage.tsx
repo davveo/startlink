@@ -225,8 +225,8 @@ export function TemplateFormPage() {
           <PanelTitle>{isEdit ? `编辑 ${editing?.code ?? ''}` : '模板内容'}</PanelTitle>
           {!isEdit ? (
             <Field
-              label="模板编码 code"
-              hint="创建后不可改，活动引用的是 code 而非数字 ID。留空则系统自动生成 tpl_<id>。"
+              label="模板编码"
+              hint="创建后不可改，活动引用的是编码而非数字 ID。留空则系统自动生成。"
             >
               <Input
                 value={form.code}
@@ -256,26 +256,26 @@ export function TemplateFormPage() {
               onChange={(e) => setForm({ ...form, channel_hint: e.target.value as ChannelType | '' })}
             >
               <option value="">不限</option>
-              <option value="inbox">inbox · 站内信</option>
-              <option value="sms">sms · 短信</option>
-              <option value="app_push">app_push · App 推送</option>
-              <option value="email">email · 邮件</option>
-              <option value="wecom">wecom · 企业微信</option>
-              <option value="dingtalk">dingtalk · 钉钉</option>
+              <option value="inbox">站内信</option>
+              <option value="sms">短信</option>
+              <option value="app_push">App 推送</option>
+              <option value="email">邮件</option>
+              <option value="wecom">企业微信</option>
+              <option value="dingtalk">钉钉</option>
             </Select>
           </Field>
-          <Field label="缺失变量策略" hint="error=报错；keep=保留占位符；default=用 schema 默认值；empty=置空。">
+          <Field label="缺失变量策略" hint="报错 / 保留占位符 / 用 Schema 默认值 / 置空。">
             <Select
               value={form.missing_var_policy}
               onChange={(e) => setForm({ ...form, missing_var_policy: e.target.value as MissingVarPolicy })}
             >
-              <option value="empty">empty · 置空</option>
-              <option value="keep">keep · 保留 {'{{var}}'}</option>
-              <option value="default">default · schema 默认值</option>
-              <option value="error">error · 报错</option>
+              <option value="empty">置空</option>
+              <option value="keep">保留 {'{{var}}'}</option>
+              <option value="default">Schema 默认值</option>
+              <option value="error">报错</option>
             </Select>
           </Field>
-          <Field label="默认语言 default_locale" hint="多语言回退用，如 zh-CN。可留空。">
+          <Field label="默认语言" hint="多语言回退用，如 zh-CN。可留空。">
             <Input
               value={form.default_locale}
               onChange={(e) => setForm({ ...form, default_locale: e.target.value })}

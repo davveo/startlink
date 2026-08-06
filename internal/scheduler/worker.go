@@ -200,6 +200,9 @@ func (w *Worker) runSplit(ctx context.Context, mainID uint64) {
 		}
 		_, _ = w.tasks.UpdateMainTaskStats(ctx, fresh.ID, fresh.Version, 0, 0, 0, domain.TaskStatusFailed)
 		_ = w.tasks.ClearSplitLease(ctx, mainID)
+		if w.agg != nil {
+			w.agg.EmitTaskTerminal(ctx, mainID, domain.TaskStatusFailed)
+		}
 		return
 	}
 	slog.Info("main task split done", "id", mainID)

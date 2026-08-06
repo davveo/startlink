@@ -10,8 +10,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/starlink/push/internal/app/audit"
 	"github.com/starlink/push/internal/app/callback"
 	"github.com/starlink/push/internal/app/campaign"
+	appnotify "github.com/starlink/push/internal/app/notify"
 	apptpl "github.com/starlink/push/internal/app/template"
 	"github.com/starlink/push/internal/auth"
 	"github.com/starlink/push/internal/bootstrap"
@@ -30,11 +32,18 @@ func main() {
 		os.Exit(1)
 	}
 
+	notifyHub := appnotify.NewHub()
+	inbox := appnotify.NewBus(infra.Notifications, notifyHub, infra.Redis.RDB())
+	listenCtx, listenCancel := context.WithCancel(context.Background())
+	defer listenCancel()
+	inbox.ListenRedis(listenCtx)
+
 	campaignSvc := campaign.NewService(campaign.Deps{
 		Tasks:          infra.Tasks,
 		PushRepo:       infra.Push,
 		Cache:          infra.AggCache,
 		Notifier:       infra.Webhook,
+		Inbox:          inbox,
 		Templates:      infra.Templates,
 		Limiter:        infra.Limiter,
 		BatchSize:      infra.Cfg.Scheduler.BatchSize,
@@ -46,14 +55,19 @@ func main() {
 	})
 	callbackSvc := callback.NewService(infra.Push, infra.Tasks)
 	templateSvc := apptpl.NewService(infra.Templates)
+	notifySvc := appnotify.NewService(inbox, notifyHub)
+	auditSvc := audit.NewService(infra.AuditLogs)
 	sessions := auth.NewManager(infra.Cfg.Auth)
 
 	engine := server.New(infra.Cfg.Server.Mode, server.Deps{
-		Auth:     handler.NewAuthHandler(sessions),
-		Sessions: sessions,
-		Campaign: handler.NewCampaignHandler(campaignSvc, infra.Channels),
-		Callback: handler.NewCallbackHandler(callbackSvc),
-		Template: handler.NewTemplateHandler(templateSvc),
+		Auth:         handler.NewAuthHandler(sessions),
+		Sessions:     sessions,
+		Campaign:     handler.NewCampaignHandler(campaignSvc, infra.Channels),
+		Callback:     handler.NewCallbackHandler(callbackSvc),
+		Template:     handler.NewTemplateHandler(templateSvc),
+		Notification: handler.NewNotificationHandler(notifySvc),
+		Audit:        handler.NewAuditHandler(auditSvc),
+		AuditRepo:    infra.AuditLogs,
 	})
 
 	srv := &http.Server{Addr: infra.Cfg.Server.Addr, Handler: engine}
@@ -69,6 +83,7 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
+	listenCancel()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(ctx)

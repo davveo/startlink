@@ -4,14 +4,18 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/starlink/push/internal/auth"
 	"github.com/starlink/push/internal/handler"
+	"github.com/starlink/push/internal/port"
 )
 
 type Deps struct {
-	Auth     *handler.AuthHandler
-	Sessions *auth.Manager
-	Campaign *handler.CampaignHandler
-	Callback *handler.CallbackHandler
-	Template *handler.TemplateHandler
+	Auth         *handler.AuthHandler
+	Sessions     *auth.Manager
+	Campaign     *handler.CampaignHandler
+	Callback     *handler.CallbackHandler
+	Template     *handler.TemplateHandler
+	Notification *handler.NotificationHandler
+	Audit        *handler.AuditHandler
+	AuditRepo    port.AuditLogRepository
 }
 
 func New(mode string, deps Deps) *gin.Engine {
@@ -20,6 +24,9 @@ func New(mode string, deps Deps) *gin.Engine {
 	}
 	r := gin.New()
 	r.Use(gin.Recovery(), gin.Logger(), corsMiddleware())
+	if deps.AuditRepo != nil {
+		r.Use(AuditMiddleware(deps.AuditRepo))
+	}
 
 	r.GET("/healthz", handler.Health)
 
@@ -36,6 +43,8 @@ func New(mode string, deps Deps) *gin.Engine {
 		}
 		{
 			protected.POST("/auth/logout", deps.Auth.Logout)
+
+			protected.GET("/overview", deps.Campaign.Overview)
 
 			protected.POST("/campaigns", deps.Campaign.Create)
 			protected.GET("/campaigns", deps.Campaign.List)
@@ -80,6 +89,20 @@ func New(mode string, deps Deps) *gin.Engine {
 			protected.POST("/templates/:id/enable", deps.Template.Enable)
 			protected.GET("/templates/:id/versions", deps.Template.ListVersions)
 			protected.POST("/templates/:id/rollback", deps.Template.Rollback)
+
+			// 消息通知中心
+			if deps.Notification != nil {
+				protected.GET("/notifications/stream", deps.Notification.Stream)
+				protected.GET("/notifications", deps.Notification.List)
+				protected.GET("/notifications/unread-count", deps.Notification.UnreadCount)
+				protected.POST("/notifications/read-all", deps.Notification.MarkAllRead)
+				protected.POST("/notifications/:id/read", deps.Notification.MarkRead)
+			}
+
+			// 审计日志（查询本身不写审计，因 GET 被中间件跳过）
+			if deps.Audit != nil {
+				protected.GET("/audit-logs", deps.Audit.List)
+			}
 		}
 	}
 	return r

@@ -2,6 +2,7 @@ package port
 
 import (
 	"context"
+	"time"
 
 	"github.com/starlink/push/internal/domain"
 )
@@ -115,6 +116,12 @@ type TaskRepository interface {
 	UpdateSubTaskResult(ctx context.Context, id uint64, workerID string, success, fail int, status domain.TaskStatus, lastErr string) (updated bool, err error)
 	// SummarizeSubTasks 按状态汇总子任务数与用户数，用于进度查询
 	SummarizeSubTasks(ctx context.Context, mainTaskID uint64) ([]domain.SubTaskStatusSummary, error)
+	// CountMainTasksByStatus 按状态聚合主任务数量
+	CountMainTasksByStatus(ctx context.Context) (map[domain.TaskStatus]int64, error)
+	// SumMainTaskUserCounts 汇总主任务用户成功/失败计数（全量）
+	SumMainTaskUserCounts(ctx context.Context) (success, fail int64, err error)
+	// CountMainTasksWithExperiment 统计配置了实验 ID 的主任务数
+	CountMainTasksWithExperiment(ctx context.Context) (int64, error)
 }
 
 // UserPushOutcomes 按 push_records 汇总的用户级渠道口径
@@ -178,6 +185,15 @@ type PushRepository interface {
 	IterPushRecords(ctx context.Context, mainTaskID uint64, fn func(domain.PushRecord) error) error
 	CreateExperimentAssignments(ctx context.Context, rows []domain.ExperimentAssignment) error
 	AggregateExperiment(ctx context.Context, mainTaskID uint64) (ExperimentMetrics, error)
+	// CountRecentSends 统计近期非测试流水发送量（成功/失败）
+	CountRecentSends(ctx context.Context, since time.Time) (SendStats, error)
+}
+
+// SendStats 近期发送统计（流水口径）
+type SendStats struct {
+	Total   int64 `json:"total"`
+	Success int64 `json:"success"` // sent/delivered/clicked
+	Failed  int64 `json:"failed"`
 }
 
 // ExperimentMetrics 实验看板指标
@@ -188,17 +204,17 @@ type ExperimentMetrics struct {
 
 // ExperimentGroupMetrics 分组指标
 type ExperimentGroupMetrics struct {
-	Group          string  `json:"group"` // control|treatment
-	AssignedUsers  int64   `json:"assigned_users"`
-	ReachUsers     int64   `json:"reach_users"` // 有流水的去重用户
-	SuccessUsers   int64   `json:"success_users"`
-	FailUsers      int64   `json:"fail_users"`
-	SuppressedUsers int64  `json:"suppressed_users"`
-	SentRecords    int64   `json:"sent_records"`
-	DeliveredRecords int64 `json:"delivered_records"`
-	ClickedRecords int64   `json:"clicked_records"`
-	FailedRecords  int64   `json:"failed_records"`
-	SuccessRate    float64 `json:"success_rate"` // success_users / max(assigned,1) for treatment; 0 for control send rate N/A
+	Group            string  `json:"group"` // control|treatment
+	AssignedUsers    int64   `json:"assigned_users"`
+	ReachUsers       int64   `json:"reach_users"` // 有流水的去重用户
+	SuccessUsers     int64   `json:"success_users"`
+	FailUsers        int64   `json:"fail_users"`
+	SuppressedUsers  int64   `json:"suppressed_users"`
+	SentRecords      int64   `json:"sent_records"`
+	DeliveredRecords int64   `json:"delivered_records"`
+	ClickedRecords   int64   `json:"clicked_records"`
+	FailedRecords    int64   `json:"failed_records"`
+	SuccessRate      float64 `json:"success_rate"` // success_users / max(assigned,1) for treatment; 0 for control send rate N/A
 }
 
 // UnsubscribeChecker 发送前按 user+channel 终检退订
@@ -244,6 +260,21 @@ type TemplateRepository interface {
 // Notifier 终态通知（Webhook）
 type Notifier interface {
 	NotifyTaskFinished(ctx context.Context, url string, event domain.WebhookEvent) error
+}
+
+// NotificationRepository 运营台站内通知
+type NotificationRepository interface {
+	Create(ctx context.Context, n *domain.Notification) error
+	List(ctx context.Context, q domain.ListNotificationQuery) ([]domain.Notification, int64, error)
+	CountUnread(ctx context.Context) (int64, error)
+	MarkRead(ctx context.Context, id uint64) (bool, error)
+	MarkAllRead(ctx context.Context) (int64, error)
+}
+
+// AuditLogRepository 写操作审计
+type AuditLogRepository interface {
+	Create(ctx context.Context, log *domain.AuditLog) error
+	List(ctx context.Context, q domain.ListAuditLogQuery) ([]domain.AuditLog, int64, error)
 }
 
 // ChannelLimiter 渠道级配额限流（按 channel × priority 分桶；可选全局保护闸）。
