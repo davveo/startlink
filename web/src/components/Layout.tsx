@@ -12,6 +12,9 @@ const navItems = [
   { to: '/templates', label: '模板中心', perm: Perm.MenuTemplates },
   { to: '/notifications', label: '通知管理', perm: Perm.MenuNotifications },
   { to: '/audit-logs', label: '审计日志', perm: Perm.MenuAudit },
+  { to: '/settings/roles', label: '角色配置', perm: Perm.MenuSettings },
+  { to: '/settings/permissions', label: '权限管理', perm: Perm.MenuSettings },
+  { to: '/settings/users', label: '用户管理', perm: Perm.MenuSettings },
 ] as const
 
 const navClass = ({ isActive }: { isActive: boolean }) =>

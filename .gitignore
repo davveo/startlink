@@ -9,3 +9,6 @@ bin/
 vendor/
 .DS_Store
 data/exports/
+configs/auth_roles.override.yaml
+configs/auth_override.yaml
+configs/auth_override.migrated

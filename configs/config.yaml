@@ -6,9 +6,9 @@ log:
   level: info   # debug | info | warn | error
   format: text  # text | json；text 形如：2026-08-05 18:52:26 [INFO] msg key=value
 
-# 运营台登录门禁：配置文件账号 + HMAC 签名 Session Cookie（无 users 表）
-# enabled=false 时跳过中间件（单测/紧急排障）；生产务必改密并更换 session_secret
-# role: admin（全权限）| operator（活动/模板/通知，无审计）| viewer（只读菜单，无写按钮）
+# 运营台登录：Session Cookie + MySQL RBAC（auth_users 等）
+# auth.users 仅在库空时 seed（明文会写成 bcrypt）；日常账号以库为准，用「用户管理」维护
+# enabled=false 时跳过鉴权（单测/紧急排障）；生产务必改密并更换 session_secret
 auth:
   enabled: true
   session_secret: "change-me-in-production"

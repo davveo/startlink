@@ -137,6 +137,22 @@ func inferAuditAction(method, fullPath, rawPath string) (action, resType, resID 
 		return "notification.read_all", "notification", ""
 	case strings.HasSuffix(p, "/read") && strings.Contains(p, "/notifications/"):
 		return "notification.read", "notification", paramID(rawPath, "/api/v1/notifications/")
+	case strings.Contains(p, "/rbac/users/") && strings.HasSuffix(p, "/role"):
+		return "rbac.set_role", "rbac", paramID(rawPath, "/api/v1/rbac/users/")
+	case method == "POST" && p == "/api/v1/rbac/users":
+		return "rbac.user_create", "rbac", ""
+	case method == "PUT" && strings.HasPrefix(p, "/api/v1/rbac/users/:username"):
+		return "rbac.user_update", "rbac", paramID(rawPath, "/api/v1/rbac/users/")
+	case strings.HasSuffix(p, "/reset-password") && strings.Contains(p, "/rbac/users/"):
+		return "rbac.reset_password", "rbac", paramID(rawPath, "/api/v1/rbac/users/")
+	case method == "POST" && p == "/api/v1/rbac/roles":
+		return "rbac.role_create", "rbac", ""
+	case method == "PUT" && strings.HasPrefix(p, "/api/v1/rbac/roles/:role"):
+		return "rbac.role_update", "rbac", paramID(rawPath, "/api/v1/rbac/roles/")
+	case method == "POST" && p == "/api/v1/rbac/permissions":
+		return "rbac.perm_create", "rbac", ""
+	case method == "PUT" && strings.HasPrefix(p, "/api/v1/rbac/permissions/:code"):
+		return "rbac.perm_update", "rbac", paramID(rawPath, "/api/v1/rbac/permissions/")
 	case p == "/api/v1/callbacks/receipt":
 		return "callback.receipt", "callback", ""
 	default:

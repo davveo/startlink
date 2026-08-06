@@ -9,6 +9,7 @@ import (
 
 type Deps struct {
 	Auth         *handler.AuthHandler
+	RBAC         *handler.RBACHandler
 	Sessions     *auth.Manager
 	Campaign     *handler.CampaignHandler
 	Callback     *handler.CallbackHandler
@@ -109,6 +110,23 @@ func New(mode string, deps Deps) *gin.Engine {
 			// 审计日志（查询本身不写审计，因 GET 被中间件跳过）
 			if deps.Audit != nil {
 				protected.GET("/audit-logs", perm(auth.PermAuditView), deps.Audit.List)
+			}
+
+			// RBAC：角色 / 权限目录 / 用户（需 rbac.manage）
+			if deps.RBAC != nil {
+				protected.GET("/rbac/catalog", perm(auth.PermRBACManage), deps.RBAC.Catalog)
+				protected.GET("/rbac/permissions", perm(auth.PermRBACManage), deps.RBAC.ListPermissions)
+				protected.POST("/rbac/permissions", perm(auth.PermRBACManage), deps.RBAC.CreatePermission)
+				protected.PUT("/rbac/permissions/:code", perm(auth.PermRBACManage), deps.RBAC.UpdatePermission)
+				protected.GET("/rbac/roles", perm(auth.PermRBACManage), deps.RBAC.ListRoles)
+				protected.POST("/rbac/roles", perm(auth.PermRBACManage), deps.RBAC.CreateRole)
+				protected.PUT("/rbac/roles/:role", perm(auth.PermRBACManage), deps.RBAC.UpdateRole)
+				protected.GET("/rbac/users", perm(auth.PermRBACManage), deps.RBAC.ListUsers)
+				protected.POST("/rbac/users", perm(auth.PermRBACManage), deps.RBAC.CreateUser)
+				protected.GET("/rbac/users/:username/secret", perm(auth.PermRBACManage), deps.RBAC.GetUserSecret)
+				protected.POST("/rbac/users/:username/reset-password", perm(auth.PermRBACManage), deps.RBAC.ResetPassword)
+				protected.PUT("/rbac/users/:username/role", perm(auth.PermRBACManage), deps.RBAC.SetUserRole)
+				protected.PUT("/rbac/users/:username", perm(auth.PermRBACManage), deps.RBAC.UpdateUser)
 			}
 		}
 	}

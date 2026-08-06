@@ -116,6 +116,10 @@ INNER JOIN (
 		&domain.ExperimentAssignment{},
 		&domain.Notification{},
 		&domain.AuditLog{},
+		&domain.AuthUser{},
+		&domain.AuthRole{},
+		&domain.AuthRolePermission{},
+		&domain.AuthPermission{},
 	)
 }
 

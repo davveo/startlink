@@ -5,6 +5,7 @@ export const Perm = {
   MenuTemplates: 'menu.templates',
   MenuNotifications: 'menu.notifications',
   MenuAudit: 'menu.audit',
+  MenuSettings: 'menu.settings',
 
   CampaignCreate: 'campaign.create',
   CampaignUpdate: 'campaign.update',
@@ -32,6 +33,7 @@ export const Perm = {
 
   NotificationRead: 'notification.read',
   AuditView: 'audit.view',
+  RBACManage: 'rbac.manage',
 } as const
 
 export type PermCode = (typeof Perm)[keyof typeof Perm]

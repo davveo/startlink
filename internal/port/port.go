@@ -277,6 +277,34 @@ type AuditLogRepository interface {
 	List(ctx context.Context, q domain.ListAuditLogQuery) ([]domain.AuditLog, int64, error)
 }
 
+// AuthRepository 运营台用户 / 角色 / 角色权限 / 权限目录（RBAC）
+type AuthRepository interface {
+	CountUsers(ctx context.Context) (int64, error)
+	CountRoles(ctx context.Context) (int64, error)
+	CountPermissions(ctx context.Context) (int64, error)
+	ListUsers(ctx context.Context) ([]domain.AuthUser, error)
+	GetUserByUsername(ctx context.Context, username string) (*domain.AuthUser, error)
+	CreateUser(ctx context.Context, u *domain.AuthUser) error
+	UpdateUser(ctx context.Context, username string, fields map[string]any) error
+
+	ListRoles(ctx context.Context) ([]domain.AuthRole, error)
+	GetRole(ctx context.Context, code string) (*domain.AuthRole, error)
+	CreateRole(ctx context.Context, role *domain.AuthRole) error
+	UpdateRole(ctx context.Context, code string, fields map[string]any) error
+	ListRolePermissions(ctx context.Context, roleCode string) ([]string, error)
+	ListAllRolePermissions(ctx context.Context) (map[string][]string, error)
+	ReplaceRolePermissions(ctx context.Context, roleCode string, perms []string) error
+
+	ListPermissions(ctx context.Context, q domain.ListPermissionQuery) ([]domain.AuthPermission, int64, error)
+	GetPermission(ctx context.Context, code string) (*domain.AuthPermission, error)
+	CreatePermission(ctx context.Context, p *domain.AuthPermission) error
+	UpdatePermission(ctx context.Context, code string, fields map[string]any) error
+	ListAllPermissionCodes(ctx context.Context) ([]string, error)
+
+	// CountEnabledUsersWithPermission 启用且其角色包含指定权限码的用户数
+	CountEnabledUsersWithPermission(ctx context.Context, perm string) (int64, error)
+}
+
 // ChannelLimiter 渠道级配额限流（按 channel × priority 分桶；可选全局保护闸）。
 // Wait 超时应返回 domain.ErrChannelThrottled（留 PEL，不记业务失败）。
 type ChannelLimiter interface {

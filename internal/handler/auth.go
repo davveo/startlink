@@ -35,10 +35,11 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	h.sessions.IssueCookie(c, req.Username)
 	info := h.sessions.InfoFor(req.Username)
 	response.OK(c, gin.H{
-		"username":    info.Username,
-		"role":        info.Role,
-		"roles":       info.Roles,
-		"permissions": info.Permissions,
+		"username":     info.Username,
+		"display_name": info.DisplayName,
+		"role":         info.Role,
+		"roles":        info.Roles,
+		"permissions":  info.Permissions,
 	})
 }
 
@@ -67,9 +68,10 @@ func (h *AuthHandler) Me(c *gin.Context) {
 	}
 	info := h.sessions.InfoFor(username)
 	response.OK(c, gin.H{
-		"username":    info.Username,
-		"role":        info.Role,
-		"roles":       info.Roles,
-		"permissions": info.Permissions,
+		"username":     info.Username,
+		"display_name": info.DisplayName,
+		"role":         info.Role,
+		"roles":        info.Roles,
+		"permissions":  info.Permissions,
 	})
 }

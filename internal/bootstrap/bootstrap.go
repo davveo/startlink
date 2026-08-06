@@ -26,6 +26,7 @@ type Infra struct {
 	Push          *repo.PushRepo
 	Notifications *repo.NotificationRepo
 	AuditLogs     *repo.AuditRepo
+	AuthUsers     *repo.AuthRepo
 	AggCache      *redisx.Aggregator
 	Limiter       port.ChannelLimiter
 	Channels      *channel.Registry
@@ -117,6 +118,7 @@ func NewInfra(cfgPath string) (*Infra, error) {
 		Push:          repo.NewPushRepo(db),
 		Notifications: repo.NewNotificationRepo(db),
 		AuditLogs:     repo.NewAuditRepo(db),
+		AuthUsers:     repo.NewAuthRepo(db),
 		AggCache:      redisx.NewAggregator(rdb),
 		Limiter:       limiter,
 		Channels:      chReg,

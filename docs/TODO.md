@@ -159,12 +159,12 @@
 
 ## 待办 · 多租户、安全与平台化
 
-- [x] **API 鉴权授权**：运营台登录门禁已做（YAML 账号 + Session Cookie 保护 `/api/v1`；回执与 healthz 放行）；简易 RBAC（角色→菜单/按钮权限）已落地，租户/业务线授权仍待办
+- [x] **API 鉴权授权**：运营台登录门禁（Session Cookie）+ MySQL RBAC；YAML 仅作库空 seed
 - [ ] **多租户数据模型**：活动、模板、流水和配置增加 `tenant_id/app_id`；`biz_id` 改为租户内唯一
-- [~] **RBAC 与审批策略**：角色（admin/operator/viewer）+ 权限码已配置驱动；多级审批仍待办
-  - 权限码：`menu.*` / `campaign.*` / `template.*` / `notification.read` / `audit.view`（见 `internal/auth/rbac.go`）
-  - 账号在 `auth.users[].role` 绑定角色；登录与 `/auth/me` 返回 `roles` + `permissions`
-  - 写接口 `RequirePermission`；前端 `Can` / `usePermission` 隐藏无权限按钮，侧栏按 `menu.*` 过滤
+- [~] **RBAC 与审批策略**：角色/权限/用户三分页；MySQL 表 `auth_users` / `auth_roles` / `auth_role_permissions`；多级审批仍待办
+  - 路由：`/settings/roles`、`/settings/permissions`、`/settings/users`
+  - API：`/api/v1/rbac/roles|permissions|users`（写操作需 `rbac.manage`）
+  - 密码 bcrypt；权限码目录仍以 `internal/auth/rbac.go` 为准
 - [ ] **回执接口鉴权与验签**：防伪造送达/点击；校验时间戳、nonce 和请求摘要
 - [ ] **密钥与凭据管理**：Audience/Channel HTTP 支持 API Key、OAuth/mTLS，敏感配置从 Secret Manager 或环境变量注入
 - [ ] **Webhook 安全与可靠**：URL 白名单（防 SSRF）、签名、失败重试；终态事件 outbox 落库，独立 Worker 重试/死信/手工重放

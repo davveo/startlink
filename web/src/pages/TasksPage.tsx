@@ -138,8 +138,9 @@ export function TasksPage() {
       {msg ? <Toast kind="ok">{msg}</Toast> : null}
 
       <Panel>
+        {/* 筛选项单独一行 wrap；查询/创建活动放下一行，避免按钮插队挤到上方行 */}
         <div className="flex flex-wrap items-end gap-3">
-          <Field label="状态" noMargin className="min-w-[8rem] flex-[1_1_8rem]">
+          <Field label="状态" noMargin className="min-w-[9rem] flex-[1_1_9rem]">
             <Select
               value={status}
               onChange={(e) => {
@@ -159,13 +160,13 @@ export function TasksPage() {
               <option value="retrying">重试中</option>
             </Select>
           </Field>
-          <Field label="业务场景" noMargin className="min-w-[8rem] flex-[1_1_8rem]">
+          <Field label="业务场景" noMargin className="min-w-[9rem] flex-[1_1_9rem]">
             <Input value={bizScene} onChange={(e) => setBizScene(e.target.value)} placeholder="demo" />
           </Field>
-          <Field label="渠道" noMargin className="min-w-[8rem] flex-[1_1_8rem]">
+          <Field label="渠道" noMargin className="min-w-[9rem] flex-[1_1_9rem]">
             <Input value={channel} onChange={(e) => setChannel(e.target.value)} placeholder="app_push" />
           </Field>
-          <Field label="优先级" noMargin className="min-w-[7rem] flex-[1_1_7rem]">
+          <Field label="优先级" noMargin className="min-w-[8rem] flex-[1_1_8rem]">
             <Select
               value={priority}
               onChange={(e) => {
@@ -178,16 +179,18 @@ export function TasksPage() {
               <option value="normal">普通</option>
             </Select>
           </Field>
-          <Field label="创建人" noMargin className="min-w-[8rem] flex-[1_1_8rem]">
+          <Field label="创建人" noMargin className="min-w-[9rem] flex-[1_1_9rem]">
             <Input value={createdBy} onChange={(e) => setCreatedBy(e.target.value)} placeholder={user?.username || 'admin'} />
           </Field>
-          <Field label="关键词（幂等键 / 标题）" noMargin className="min-w-[11rem] flex-[1_1_12rem]">
+          <Field label="关键词" noMargin className="min-w-[11rem] flex-[1_1_12rem]">
             <Input
               value={keyword}
               onChange={(e) => setKeyword(e.target.value)}
-              placeholder="camp- / Demo"
+              placeholder="幂等键 / 标题"
             />
           </Field>
+        </div>
+        <div className="mt-3 flex flex-wrap items-end gap-3">
           <BtnRow className="shrink-0">
             <Button
               variant="ink"
@@ -205,24 +208,22 @@ export function TasksPage() {
                 创建活动
               </ButtonLink>
             </Can>
+            <Can perm={Perm.CampaignBatch}>
+              <Button variant="ghost" type="button" disabled={busy || !selected.length} onClick={() => void batch('pause')}>
+                批量暂停
+              </Button>
+              <Button variant="ghost" type="button" disabled={busy || !selected.length} onClick={() => void batch('resume')}>
+                批量恢复
+              </Button>
+              <Button variant="danger" type="button" disabled={busy || !selected.length} onClick={() => void batch('cancel')}>
+                批量取消
+              </Button>
+              <Button variant="primary" type="button" disabled={busy || !selected.length} onClick={() => void batch('retry')}>
+                批量重推
+              </Button>
+            </Can>
           </BtnRow>
         </div>
-        <BtnRow className="mt-3">
-          <Can perm={Perm.CampaignBatch}>
-            <Button variant="ghost" type="button" disabled={busy || !selected.length} onClick={() => void batch('pause')}>
-              批量暂停
-            </Button>
-            <Button variant="ghost" type="button" disabled={busy || !selected.length} onClick={() => void batch('resume')}>
-              批量恢复
-            </Button>
-            <Button variant="danger" type="button" disabled={busy || !selected.length} onClick={() => void batch('cancel')}>
-              批量取消
-            </Button>
-            <Button variant="primary" type="button" disabled={busy || !selected.length} onClick={() => void batch('retry')}>
-              批量重推
-            </Button>
-          </Can>
-        </BtnRow>
       </Panel>
 
       <Panel className="mt-4">

@@ -12,6 +12,9 @@ import { NotificationsPage } from './pages/NotificationsPage'
 import { OpsPage } from './pages/OpsPage'
 import { ProgressPage } from './pages/ProgressPage'
 import { RecordsPage } from './pages/RecordsPage'
+import { SettingsPermissionsPage } from './pages/SettingsPermissionsPage'
+import { SettingsRolesPage } from './pages/SettingsRolesPage'
+import { SettingsUsersPage } from './pages/SettingsUsersPage'
 import { SubTasksPage } from './pages/SubTasksPage'
 import { TasksPage } from './pages/TasksPage'
 import { TemplateFormPage } from './pages/TemplateFormPage'
@@ -37,6 +40,10 @@ createRoot(document.getElementById('root')!).render(
             <Route path="progress" element={<ProgressPage />} />
             <Route path="notifications" element={<NotificationsPage />} />
             <Route path="audit-logs" element={<AuditLogsPage />} />
+            <Route path="settings/roles" element={<SettingsRolesPage />} />
+            <Route path="settings/permissions" element={<SettingsPermissionsPage />} />
+            <Route path="settings/users" element={<SettingsUsersPage />} />
+            <Route path="settings/rbac" element={<Navigate to="/settings/roles" replace />} />
             <Route path="ops" element={<OpsPage />} />
             <Route path="ops/:id/records" element={<RecordsPage />} />
             <Route path="ops/:id" element={<OpsPage />} />

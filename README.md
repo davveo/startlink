@@ -202,7 +202,7 @@ go run ./cmd/pusher -config configs/config.yaml -queue=normal
 
 也可以使用 Makefile：`make api`、`make scheduler`、`make pusher`、`make build`、`make tidy`，以及 `make docker-up` / `docker-down` / `docker-logs` / `docker-rebuild`。变量 `GO` 与 `CFG` 可覆盖。
 
-首次启动任意进程都会执行 GORM `AutoMigrate` 创建下表：`main_tasks`、`sub_tasks`、`push_records`、`push_receipts`、`push_templates`。生产环境建议改用独立、可回滚的迁移工具，不要让多个实例同时执行 DDL。
+首次启动任意进程都会执行 GORM `AutoMigrate` 创建下表：`main_tasks`、`sub_tasks`、`push_records`、`push_receipts`、`push_templates`、`auth_users`、`auth_roles`、`auth_role_permissions` 等。生产环境建议改用独立、可回滚的迁移工具，不要让多个实例同时执行 DDL。
 
 ## 完整联调示例
 
@@ -417,7 +417,7 @@ curl -b /tmp/starlink.cookie http://localhost:8080/api/v1/campaigns/biz/campaign
 | `auth.session_secret` | HMAC 签名密钥 | `change-me-in-production` | 同左（生产务必更换） |
 | `auth.cookie_name` | Session Cookie 名 | `starlink_session` | `starlink_session` |
 | `auth.ttl_hours` | Cookie 有效期（小时） | `24` | `24` |
-| `auth.users` | 配置文件账号列表（明文密码） | 空 | `admin` / `admin123` |
+| `auth.users` | **仅库空时 seed** 进 `auth_users`（明文→bcrypt）；日常账号以库为准 | 空 | `admin` / `admin123` |
 
 `campaign.default_channel` 虽然存在于配置结构中，但创建活动逻辑没有读取它，调用方仍必须传 `channel` 或 `channels`。
 
@@ -435,18 +435,22 @@ curl -b /tmp/starlink.cookie http://localhost:8080/api/v1/campaigns/biz/campaign
 {"code": 40001, "message": "invalid parameter"}
 ```
 
-所有接口都在 `/api/v1` 下。运营台使用 **配置文件账号 + HMAC 签名 HttpOnly Session Cookie** 鉴权，并带简易 RBAC（角色 → 菜单/写操作权限码）。
+所有接口都在 `/api/v1` 下。运营台使用 **HMAC Session Cookie + MySQL RBAC**（用户/角色存库；权限码目录以代码常量为准）。
 
 - **公开**：`GET /healthz`、`POST /api/v1/auth/login`、`GET /api/v1/auth/me`（未登录返回业务码 `40101`）、`POST /api/v1/callbacks/receipt`
 - **需登录**：其余 `/api/v1/*`（含 `POST /auth/logout`）；无有效 Cookie → HTTP 401 + `code: 40101`
 - **写接口**：另需对应权限码，否则 HTTP 403 + `code: 40301`
 - `auth.enabled: false` 时跳过鉴权/授权（便于单测/紧急排障；`/me` 返回全权限）
-- 默认账号（YAML，**务必改密**并更换 `session_secret`）：
-  - `admin` / `admin123` → 角色 `admin`（全权限）
-  - `operator` / `operator123` → 活动/模板/通知（无审计）
-  - `viewer` / `viewer123` → 只读菜单，无写按钮
+- **表**：`auth_users`（bcrypt 密码）、`auth_roles`、`auth_role_permissions`；AutoMigrate 创建
+- **Seed**：库空时从 YAML `auth.users` + 内置 admin/operator/viewer 角色写入；若存在旧 `auth_override.yaml` / `auth_roles.override.yaml` 则一次性迁入库并写 `auth_override.migrated` 标记
+- 默认 seed 账号（**务必改密**并更换 `session_secret`）：
+  - `admin` / `admin123` → 角色 `admin`
+  - `operator` / `operator123` → `operator`
+  - `viewer` / `viewer123` → `viewer`
 
-给账号赋权：在 `auth.users` 中为用户设置 `role: admin|operator|viewer`（空则 viewer）。权限表见 `internal/auth/rbac.go`。
+日常赋权：侧栏 **角色配置 / 权限管理 / 用户管理**（需 `menu.settings` + `rbac.manage`）。YAML 不再作为运行时账号源。
+
+改角色/用户后鉴权立即读库；已登录用户请刷新页面（或重新登录）以更新前端菜单按钮。
 
 curl 联调可先登录并保存 Cookie：
 

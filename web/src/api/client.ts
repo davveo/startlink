@@ -367,4 +367,178 @@ export const api = {
     params.set('page_size', String(q?.page_size ?? 20))
     return request<import('./types').AuditLogListResult>(`/api/v1/audit-logs?${params}`)
   },
+
+  rbacCatalog: () =>
+    request<{
+      roles: Array<{
+        role: string
+        name: string
+        description: string
+        permissions: string[]
+        builtin?: boolean
+      }>
+      permissions: Array<{ code: string; name: string; group: string; kind: string }>
+      persistence: { mode: string; config_path?: string; override_path?: string; note?: string }
+    }>('/api/v1/rbac/catalog'),
+
+  rbacPermissions: (q?: {
+    page?: number
+    page_size?: number
+    keyword?: string
+    group?: string
+    kind?: string
+  }) => {
+    const params = new URLSearchParams()
+    params.set('page', String(q?.page ?? 1))
+    params.set('page_size', String(q?.page_size ?? 20))
+    if (q?.keyword) params.set('keyword', q.keyword)
+    if (q?.group) params.set('group', q.group)
+    if (q?.kind) params.set('kind', q.kind)
+    return request<{
+      items: Array<{
+        code: string
+        name: string
+        group: string
+        kind: string
+        description?: string
+        is_system?: boolean
+      }>
+      total: number
+      page: number
+      page_size: number
+    }>(`/api/v1/rbac/permissions?${params}`)
+  },
+
+  createPermission: (body: {
+    code: string
+    name: string
+    group?: string
+    kind?: string
+    description?: string
+  }) =>
+    request<{ ok: boolean; code: string; persisted: boolean }>('/api/v1/rbac/permissions', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  updatePermission: (
+    code: string,
+    body: { name: string; group?: string; kind?: string; description?: string },
+  ) =>
+    request<{ ok: boolean; code: string; persisted: boolean }>(
+      `/api/v1/rbac/permissions/${encodeURIComponent(code)}`,
+      { method: 'PUT', body: JSON.stringify(body) },
+    ),
+
+  rbacRoles: () =>
+    request<{
+      items: Array<{
+        role: string
+        name: string
+        description: string
+        permissions: string[]
+        builtin?: boolean
+      }>
+      persistence?: { mode: string; note?: string }
+    }>('/api/v1/rbac/roles'),
+
+  createRole: (body: { role: string; name?: string; description?: string; permissions: string[] }) =>
+    request<{
+      role?: {
+        role: string
+        name: string
+        description: string
+        permissions: string[]
+        builtin?: boolean
+      }
+      persisted: boolean
+      warning?: string
+    }>('/api/v1/rbac/roles', { method: 'POST', body: JSON.stringify(body) }),
+
+  updateRole: (
+    role: string,
+    body: { name?: string; description?: string; permissions: string[] },
+  ) =>
+    request<{
+      role?: {
+        role: string
+        name: string
+        description: string
+        permissions: string[]
+        builtin?: boolean
+      }
+      persisted: boolean
+      warning?: string
+    }>(`/api/v1/rbac/roles/${encodeURIComponent(role)}`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+
+  rbacUsers: () =>
+    request<{
+      items: Array<{
+        username: string
+        display_name?: string
+        role: string
+        enabled: boolean
+        source: string
+        permission_count: number
+        has_password_note?: boolean
+      }>
+    }>('/api/v1/rbac/users'),
+
+  getUserSecret: (username: string) =>
+    request<{
+      username: string
+      password_note: string
+      has_note: boolean
+      message?: string
+    }>(`/api/v1/rbac/users/${encodeURIComponent(username)}/secret`),
+
+  resetUserPassword: (username: string, password: string) =>
+    request<{ ok: boolean; username: string; persisted: boolean }>(
+      `/api/v1/rbac/users/${encodeURIComponent(username)}/reset-password`,
+      { method: 'POST', body: JSON.stringify({ password }) },
+    ),
+
+  createUser: (body: { username: string; password: string; role: string; display_name?: string }) =>
+    request<{
+      username: string
+      display_name?: string
+      role: string
+      roles: string[]
+      permissions: string[]
+      persisted: boolean
+      warning?: string
+    }>('/api/v1/rbac/users', { method: 'POST', body: JSON.stringify(body) }),
+
+  updateUser: (
+    username: string,
+    body: { role?: string; password?: string; enabled?: boolean; display_name?: string },
+  ) =>
+    request<{
+      username: string
+      display_name?: string
+      role: string
+      roles: string[]
+      permissions: string[]
+      persisted: boolean
+      warning?: string
+    }>(`/api/v1/rbac/users/${encodeURIComponent(username)}`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+
+  setUserRole: (username: string, role: string) =>
+    request<{
+      username: string
+      role: string
+      roles: string[]
+      permissions: string[]
+      persisted: boolean
+      warning?: string
+    }>(`/api/v1/rbac/users/${encodeURIComponent(username)}/role`, {
+      method: 'PUT',
+      body: JSON.stringify({ role }),
+    }),
 }

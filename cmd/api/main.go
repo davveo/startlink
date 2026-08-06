@@ -57,10 +57,15 @@ func main() {
 	templateSvc := apptpl.NewService(infra.Templates)
 	notifySvc := appnotify.NewService(inbox, notifyHub)
 	auditSvc := audit.NewService(infra.AuditLogs)
-	sessions := auth.NewManager(infra.Cfg.Auth)
+	if err := auth.Seed(context.Background(), infra.AuthUsers, infra.Cfg.Auth, *cfgPath); err != nil {
+		slog.Error("auth seed failed", "err", err)
+		os.Exit(1)
+	}
+	sessions := auth.NewManager(infra.Cfg.Auth, infra.AuthUsers)
 
 	engine := server.New(infra.Cfg.Server.Mode, server.Deps{
 		Auth:         handler.NewAuthHandler(sessions),
+		RBAC:         handler.NewRBACHandler(sessions),
 		Sessions:     sessions,
 		Campaign:     handler.NewCampaignHandler(campaignSvc, infra.Channels),
 		Callback:     handler.NewCallbackHandler(callbackSvc),

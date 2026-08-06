@@ -101,6 +101,14 @@ export function auditActionLabel(action: string): string {
     'template.preview': '模板预览',
     'notification.read': '通知已读',
     'notification.read_all': '全部已读',
+    'rbac.set_role': '调整账号角色',
+    'rbac.user_create': '创建用户',
+    'rbac.user_update': '编辑用户',
+    'rbac.reset_password': '重置用户密码',
+    'rbac.role_create': '创建角色',
+    'rbac.role_update': '更新角色权限',
+    'rbac.perm_create': '注册权限',
+    'rbac.perm_update': '更新权限',
     'callback.receipt': '渠道回执',
   }
   return map[action] ?? action
