@@ -127,8 +127,8 @@ export function SubTasksPage() {
       ) : null}
 
       <Panel>
-        <div className="grid gap-4 md:grid-cols-2">
-          <Field label="子任务状态筛选">
+        <div className="flex flex-wrap items-end gap-3">
+          <Field label="子任务状态筛选" noMargin className="min-w-[12rem] flex-[1_1_14rem]">
             <Select
               value={status}
               onChange={(e) => {
@@ -145,11 +145,11 @@ export function SubTasksPage() {
               <option value="retrying">retrying</option>
             </Select>
           </Field>
-          <div className="flex items-end pb-3.5">
+          <BtnRow className="shrink-0">
             <Button variant="ink" type="button" disabled={busy} onClick={() => void load()}>
               刷新
             </Button>
-          </div>
+          </BtnRow>
         </div>
 
         <TableWrap>

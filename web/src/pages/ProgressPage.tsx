@@ -130,33 +130,35 @@ export function ProgressPage() {
 
       <Panel>
         <PanelTitle>查询进度</PanelTitle>
-        <form onSubmit={onLookup} className="max-w-xl">
-          <Field label="任务 ID 或业务幂等键">
-            <Input
-              className="font-mono text-sm"
-              value={lookup}
-              onChange={(e) => setLookup(e.target.value)}
-              placeholder="1 或 camp-xxx"
-            />
-          </Field>
-          <BtnRow>
-            <Button variant="ink" type="submit" disabled={busy}>
-              查询
-            </Button>
-            <ButtonLink to="/campaigns" variant="ghost">
-              去创建活动
-            </ButtonLink>
-            <label className="inline-flex cursor-pointer items-center gap-2">
-              <Chip tone="muted">
-                <input
-                  type="checkbox"
-                  checked={autoRefresh}
-                  onChange={(e) => setAutoRefresh(e.target.checked)}
-                />
-                自动刷新
-              </Chip>
-            </label>
-          </BtnRow>
+        <form onSubmit={onLookup}>
+          <div className="flex max-w-3xl flex-wrap items-end gap-3">
+            <Field label="任务 ID 或业务幂等键" noMargin className="min-w-[14rem] flex-[1_1_16rem]">
+              <Input
+                className="font-mono text-sm"
+                value={lookup}
+                onChange={(e) => setLookup(e.target.value)}
+                placeholder="1 或 camp-xxx"
+              />
+            </Field>
+            <BtnRow className="shrink-0">
+              <Button variant="ink" type="submit" disabled={busy}>
+                查询
+              </Button>
+              <ButtonLink to="/campaigns" variant="ghost">
+                去创建活动
+              </ButtonLink>
+              <label className="inline-flex cursor-pointer items-center gap-2 self-center">
+                <Chip tone="muted">
+                  <input
+                    type="checkbox"
+                    checked={autoRefresh}
+                    onChange={(e) => setAutoRefresh(e.target.checked)}
+                  />
+                  自动刷新
+                </Chip>
+              </label>
+            </BtnRow>
+          </div>
         </form>
 
         {progress ? (

@@ -73,23 +73,21 @@ export function TemplatesPage() {
       {msg ? <Toast kind="ok">{msg}</Toast> : null}
 
       <Panel>
-        <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
-          <div className="grid flex-1 gap-3 sm:grid-cols-2 md:grid-cols-3">
-            <Field label="状态">
-              <Select value={status} onChange={(e) => setStatus(e.target.value as TemplateStatus | '')}>
-                <option value="">全部</option>
-                <option value="draft">draft</option>
-                <option value="pending_review">pending_review</option>
-                <option value="approved">approved</option>
-                <option value="rejected">rejected</option>
-                <option value="disabled">disabled</option>
-              </Select>
-            </Field>
-            <Field label="关键词">
-              <Input value={keyword} onChange={(e) => setKeyword(e.target.value)} placeholder="名称 / code" />
-            </Field>
-          </div>
-          <BtnRow>
+        <div className="mb-4 flex flex-wrap items-end gap-3">
+          <Field label="状态" noMargin className="min-w-[9rem] flex-[1_1_9rem]">
+            <Select value={status} onChange={(e) => setStatus(e.target.value as TemplateStatus | '')}>
+              <option value="">全部</option>
+              <option value="draft">draft</option>
+              <option value="pending_review">pending_review</option>
+              <option value="approved">approved</option>
+              <option value="rejected">rejected</option>
+              <option value="disabled">disabled</option>
+            </Select>
+          </Field>
+          <Field label="关键词" noMargin className="min-w-[11rem] flex-[1_1_12rem]">
+            <Input value={keyword} onChange={(e) => setKeyword(e.target.value)} placeholder="名称 / code" />
+          </Field>
+          <BtnRow className="shrink-0">
             <Button variant="ink" type="button" onClick={() => void load()} disabled={busy}>
               刷新
             </Button>

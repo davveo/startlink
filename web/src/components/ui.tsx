@@ -72,14 +72,17 @@ export function Field({
   hint,
   children,
   className,
+  noMargin,
 }: {
   label: ReactNode
   hint?: ReactNode
   children: ReactNode
   className?: string
+  /** 与按钮同行时关闭默认下边距，避免底对齐错位 */
+  noMargin?: boolean
 }) {
   return (
-    <label className={cn('mb-3.5 grid gap-1.5', className)}>
+    <label className={cn(noMargin ? 'mb-0' : 'mb-3.5', 'grid gap-1.5', className)}>
       <span className="text-[0.82rem] font-semibold text-ink-soft">{label}</span>
       {children}
       {hint ? <small className="text-muted">{hint}</small> : null}

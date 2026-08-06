@@ -71,14 +71,19 @@ export function AuditLogsPage() {
       {err ? <Toast kind="error">{err}</Toast> : null}
 
       <Panel>
-        <div className="grid gap-3 md:grid-cols-3">
-          <Field label="操作者">
+        <div className="flex flex-wrap items-end gap-3">
+          <Field label="操作者" noMargin className="min-w-[9rem] flex-[1_1_9rem]">
             <Input value={operator} onChange={(e) => setOperator(e.target.value)} placeholder="用户名" />
           </Field>
-          <Field label="动作" hint="可填前缀，如 campaign / auth">
-            <Input value={action} onChange={(e) => setAction(e.target.value)} placeholder="campaign.create" />
+          <Field label="动作" noMargin className="min-w-[11rem] flex-[1_1_11rem]">
+            <Input
+              value={action}
+              onChange={(e) => setAction(e.target.value)}
+              placeholder="campaign.create"
+              title="可填前缀，如 campaign / auth"
+            />
           </Field>
-          <Field label="结果">
+          <Field label="结果" noMargin className="min-w-[8rem] flex-[1_1_8rem]">
             <Select
               value={successFilter}
               onChange={(e) => {
@@ -91,20 +96,21 @@ export function AuditLogsPage() {
               <option value="0">失败</option>
             </Select>
           </Field>
+          <BtnRow className="shrink-0">
+            <Button
+              variant="ink"
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                setPage(1)
+                void load()
+              }}
+            >
+              查询
+            </Button>
+          </BtnRow>
         </div>
-        <BtnRow>
-          <Button
-            variant="ink"
-            type="button"
-            disabled={busy}
-            onClick={() => {
-              setPage(1)
-              void load()
-            }}
-          >
-            查询
-          </Button>
-        </BtnRow>
+        <p className="mt-1.5 text-xs text-muted">动作可填前缀，如 campaign / auth</p>
       </Panel>
 
       <Panel className="mt-4">

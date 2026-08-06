@@ -86,11 +86,11 @@ export function OpsPage() {
       {err ? <Toast kind="error">{err}</Toast> : null}
 
       <Panel>
-        <div className="grid gap-3 md:grid-cols-3">
-          <Field label="主任务 ID" hint="从任务列表点「分析」会自动带入。">
+        <div className="flex flex-wrap items-end gap-3">
+          <Field label="主任务 ID" noMargin className="min-w-[12rem] flex-[1_1_16rem]">
             <Input value={taskId} onChange={(e) => setTaskId(e.target.value)} placeholder="task id" />
           </Field>
-          <div className="flex items-end gap-2 pb-3.5">
+          <BtnRow className="shrink-0">
             <Button variant="ink" type="button" disabled={busy} onClick={() => void load()}>
               加载分析
             </Button>
@@ -99,8 +99,9 @@ export function OpsPage() {
                 查看流水
               </ButtonLink>
             ) : null}
-          </div>
+          </BtnRow>
         </div>
+        <p className="mt-1.5 text-xs text-muted">从任务列表点「分析」会自动带入。</p>
       </Panel>
 
       {funnel ? (
