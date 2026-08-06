@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { ApiError, api } from '../api/client'
 import type { CampaignListItem, TaskStatus } from '../api/types'
+import { useAuth } from '../auth/AuthContext'
 import { StatusChip } from '../components/StatusChip'
 import {
   BtnRow,
@@ -29,6 +30,7 @@ function formatTime(v?: string) {
 }
 
 export function TasksPage() {
+  const { user } = useAuth()
   const [items, setItems] = useState<CampaignListItem[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
@@ -112,7 +114,11 @@ export function TasksPage() {
     if (!biz) return
     setBusy(true)
     try {
-      const res = await api.copyCampaign(id, { biz_id: biz, as_draft: true, created_by: 'console' })
+      const res = await api.copyCampaign(id, {
+        biz_id: biz,
+        as_draft: true,
+        created_by: user?.username || undefined,
+      })
       setMsg(`已复制为草稿 task_id=${res.task_id}`)
       await load()
     } catch (e) {
@@ -179,7 +185,7 @@ export function TasksPage() {
             </Select>
           </Field>
           <Field label="created_by">
-            <Input value={createdBy} onChange={(e) => setCreatedBy(e.target.value)} placeholder="console" />
+            <Input value={createdBy} onChange={(e) => setCreatedBy(e.target.value)} placeholder={user?.username || 'admin'} />
           </Field>
           <Field label="关键词（biz_id / title）">
             <Input

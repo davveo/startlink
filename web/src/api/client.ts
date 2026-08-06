@@ -21,9 +21,19 @@ export class ApiError extends Error {
   }
 }
 
+function redirectToLoginIfNeeded(path: string) {
+  if (typeof window === 'undefined') return
+  if (window.location.pathname.startsWith('/login')) return
+  // /auth/me 由 AuthContext 自行处理，避免启动时整页跳转闪烁
+  if (path.includes('/auth/me') || path.includes('/auth/login')) return
+  const next = encodeURIComponent(window.location.pathname + window.location.search)
+  window.location.assign(`/login?next=${next}`)
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...init,
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
       ...(init?.headers ?? {}),
@@ -33,7 +43,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     body = (await res.json()) as ApiBody<T>
   } catch {
+    if (res.status === 401) {
+      redirectToLoginIfNeeded(path)
+    }
     throw new ApiError(res.status, `HTTP ${res.status}`)
+  }
+  if (res.status === 401 || body.code === 40101) {
+    redirectToLoginIfNeeded(path)
+    throw new ApiError(body.code || 40101, body.message || 'unauthorized')
   }
   if (body.code !== 0) {
     throw new ApiError(body.code, body.message || 'request failed')
@@ -43,6 +60,21 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   healthz: () => request<{ status: string }>('/healthz'),
+
+  login: (username: string, password: string) =>
+    request<{ username: string }>('/api/v1/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
+    }),
+
+  logout: () =>
+    request<{ ok: boolean }>('/api/v1/auth/logout', {
+      method: 'POST',
+      body: '{}',
+    }),
+
+  me: () => request<{ username: string; auth_disabled?: boolean }>('/api/v1/auth/me'),
+
   listChannels: () => request<{ channels: ChannelType[] }>('/api/v1/channels'),
 
   listTemplates: (q?: {
@@ -93,19 +125,19 @@ export const api = {
   deleteTemplate: (id: number) =>
     request<{ deleted: boolean }>(`/api/v1/templates/${id}`, { method: 'DELETE' }),
 
-  submitTemplate: (id: number, operator = 'console') =>
+  submitTemplate: (id: number, operator: string) =>
     request<Template>(`/api/v1/templates/${id}/submit`, {
       method: 'POST',
       body: JSON.stringify({ operator }),
     }),
 
-  approveTemplate: (id: number, reviewed_by = 'console') =>
+  approveTemplate: (id: number, reviewed_by: string) =>
     request<Template>(`/api/v1/templates/${id}/approve`, {
       method: 'POST',
       body: JSON.stringify({ reviewed_by }),
     }),
 
-  rejectTemplate: (id: number, reject_reason: string, reviewed_by = 'console') =>
+  rejectTemplate: (id: number, reject_reason: string, reviewed_by: string) =>
     request<Template>(`/api/v1/templates/${id}/reject`, {
       method: 'POST',
       body: JSON.stringify({ reviewed_by, reject_reason }),
@@ -246,10 +278,10 @@ export const api = {
     )
   },
 
-  createExport: (id: number, kind = 'records') =>
+  createExport: (id: number, kind = 'records', created_by?: string) =>
     request<import('./types').ExportJob>(`/api/v1/campaigns/${id}/exports`, {
       method: 'POST',
-      body: JSON.stringify({ kind, created_by: 'console' }),
+      body: JSON.stringify({ kind, created_by: created_by || undefined }),
     }),
 
   getExport: (jobId: number) => request<import('./types').ExportJob>(`/api/v1/exports/${jobId}`),

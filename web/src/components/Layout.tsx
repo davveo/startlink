@@ -1,5 +1,7 @@
-import { NavLink, Outlet } from 'react-router-dom'
+import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { useAuth } from '../auth/AuthContext'
 import { cn } from '../lib/cn'
+import { Button } from './ui'
 
 const navClass = ({ isActive }: { isActive: boolean }) =>
   cn(
@@ -8,6 +10,14 @@ const navClass = ({ isActive }: { isActive: boolean }) =>
   )
 
 export function Layout() {
+  const { user, logout } = useAuth()
+  const navigate = useNavigate()
+
+  async function onLogout() {
+    await logout()
+    navigate('/login', { replace: true })
+  }
+
   return (
     <div className="grid min-h-screen grid-rows-[auto_1fr_auto]">
       <header className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-6 bg-ink px-6 py-4 text-[#f7f8fa]">
@@ -17,7 +27,7 @@ export function Layout() {
           </div>
           <div className="text-sm text-white/55">推送运营台</div>
         </div>
-        <nav className="flex flex-wrap gap-1">
+        <nav className="flex flex-wrap items-center gap-1">
           <NavLink to="/" end className={navClass}>
             概览
           </NavLink>
@@ -33,6 +43,17 @@ export function Layout() {
           <NavLink to="/campaigns" className={navClass}>
             活动
           </NavLink>
+          <div className="ml-2 flex items-center gap-2 border-l border-white/15 pl-3">
+            <span className="text-sm text-white/70">{user?.username}</span>
+            <Button
+              type="button"
+              variant="ghost"
+              className="border-white/20 px-3 py-1.5 text-xs text-white hover:enabled:bg-white/10"
+              onClick={() => void onLogout()}
+            >
+              退出
+            </Button>
+          </div>
         </nav>
       </header>
       <main className="mx-auto w-[min(1120px,calc(100%-2rem))] py-8 pb-12">
