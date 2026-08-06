@@ -394,6 +394,11 @@ func (f *ABSampleFilter) Filter(ctx context.Context, bizScene string, users []do
 
 // SampleByPercent 按 userID 稳定哈希抽样（供 Splitter 使用）
 func SampleByPercent(userID string, percent int) bool {
+	return SampleByPercentWithSalt(userID, "", percent)
+}
+
+// SampleByPercentWithSalt 带实验盐的稳定哈希抽样
+func SampleByPercentWithSalt(userID, salt string, percent int) bool {
 	if percent >= 100 {
 		return true
 	}
@@ -401,6 +406,30 @@ func SampleByPercent(userID string, percent int) bool {
 		return false
 	}
 	h := fnv.New32a()
+	if salt != "" {
+		_, _ = h.Write([]byte(salt))
+		_, _ = h.Write([]byte(":"))
+	}
 	_, _ = h.Write([]byte(userID))
 	return int(h.Sum32()%100) < percent
+}
+
+// ExperimentGroup 返回 control | treatment；controlPercent∈[0,100]
+func ExperimentGroup(userID, salt string, controlPercent int) string {
+	if controlPercent <= 0 {
+		return "treatment"
+	}
+	if controlPercent >= 100 {
+		return "control"
+	}
+	h := fnv.New32a()
+	if salt != "" {
+		_, _ = h.Write([]byte(salt))
+		_, _ = h.Write([]byte(":"))
+	}
+	_, _ = h.Write([]byte(userID))
+	if int(h.Sum32()%100) < controlPercent {
+		return "control"
+	}
+	return "treatment"
 }

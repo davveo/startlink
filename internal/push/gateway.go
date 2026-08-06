@@ -17,6 +17,12 @@ import (
 
 const mainStatusCacheTTL = 300 * time.Millisecond
 
+// 包内哨兵：抑制态（频控/退订等已记流水，调用方视为“处理完成”）；主任务取消则停止发送链。
+var (
+	errSuppressed    = errors.New("suppressed")
+	errMainCancelled = errors.New("main task cancelled")
+)
+
 type mainCacheEntry struct {
 	status    domain.TaskStatus
 	windows   []domain.SendWindow
@@ -170,16 +176,21 @@ func (g *Gateway) Handle(ctx context.Context, msg domain.PushMessage) error {
 	if st == domain.TaskStatusPaused {
 		return domain.ErrMainTaskPaused
 	}
-	if len(windows) > 0 && !domain.InSendWindows(windows, time.Now()) {
+
+	if msg.ExpireAt != nil && !msg.ExpireAt.IsZero() && time.Now().After(*msg.ExpireAt) {
+		return g.markExpired(ctx, msg)
+	}
+
+	now := g.nowInTZ(msg.Timezone)
+	if len(windows) > 0 && !domain.InSendWindows(windows, now) {
 		return domain.ErrOutsideSendWindow
 	}
 
-	if g.inQuietHours(msg.BizScene) {
+	if g.inQuietHours(msg.BizScene, now) {
 		return domain.ErrQuietHours
 	}
 
-	content := RenderTemplate(msg.Body, msg.Vars)
-	chs := msg.EffectiveChannels()
+	chs := msg.ResolveSendChannels()
 	mode := msg.EffectiveMode()
 	if len(chs) == 0 {
 		return fmt.Errorf("no channel configured")
@@ -187,11 +198,26 @@ func (g *Gateway) Handle(ctx context.Context, msg domain.PushMessage) error {
 
 	switch mode {
 	case domain.ChannelModeParallel:
-		return g.sendParallel(ctx, msg, chs, content)
-	case domain.ChannelModeFallback:
-		return g.sendFallback(ctx, msg, chs, content)
+		return g.sendParallel(ctx, msg, chs)
+	case domain.ChannelModeAllSuccess:
+		return g.sendAllSuccess(ctx, msg, chs)
+	case domain.ChannelModeFallback, domain.ChannelModeCostPriority:
+		return g.sendFallback(ctx, msg, chs)
+	case domain.ChannelModeConditional:
+		// 条件路由已解析为渠道链：单渠走 single，多渠默认降级
+		if len(chs) == 1 {
+			ok, err := g.sendOne(ctx, msg, chs[0], true)
+			if ok {
+				return nil
+			}
+			if errors.Is(err, errSuppressed) {
+				return nil
+			}
+			return err
+		}
+		return g.sendFallback(ctx, msg, chs)
 	default:
-		ok, err := g.sendOne(ctx, msg, chs[0], content, true)
+		ok, err := g.sendOne(ctx, msg, chs[0], true)
 		if ok {
 			return nil
 		}
@@ -202,7 +228,19 @@ func (g *Gateway) Handle(ctx context.Context, msg domain.PushMessage) error {
 	}
 }
 
-func (g *Gateway) inQuietHours(bizScene string) bool {
+func (g *Gateway) nowInTZ(tz string) time.Time {
+	now := time.Now()
+	if strings.TrimSpace(tz) == "" {
+		return now
+	}
+	loc, err := time.LoadLocation(tz)
+	if err != nil {
+		return now
+	}
+	return now.In(loc)
+}
+
+func (g *Gateway) inQuietHours(bizScene string, now time.Time) bool {
 	qh := g.freq.QuietHours
 	if !g.freq.Enabled || !qh.Enabled {
 		return false
@@ -220,7 +258,57 @@ func (g *Gateway) inQuietHours(bizScene string) bool {
 			return false
 		}
 	}
-	return domain.InQuietHours(qh.Start, qh.End, time.Now())
+	return domain.InQuietHours(qh.Start, qh.End, now)
+}
+
+func (g *Gateway) markExpired(ctx context.Context, msg domain.PushMessage) error {
+	chs := msg.EffectiveChannels()
+	if len(chs) == 0 {
+		chs = []domain.ChannelType{msg.Channel}
+	}
+	for _, ch := range chs {
+		if ch == "" {
+			continue
+		}
+		title, body, _, _ := g.resolveContent(msg, ch)
+		_ = title
+		if g.pushRepo == nil {
+			continue
+		}
+		id, dup, inFlight, err := g.pushRepo.ClaimDelivery(ctx, g.newRecord(msg, ch, body))
+		if err != nil {
+			slog.Warn("expire claim failed", "user", msg.UserID, "channel", ch, "err", err)
+			continue
+		}
+		if dup || inFlight {
+			continue
+		}
+		_ = g.pushRepo.UpdateRecordStatus(ctx, id, domain.PushStatusExpired, "", "campaign expired")
+	}
+	slog.Info("skip push: expired", "main_task_id", msg.MainTaskID, "user", msg.UserID)
+	return nil // ACK 成功路径，不留 PEL
+}
+
+func (g *Gateway) resolveContent(msg domain.PushMessage, ch domain.ChannelType) (title, body string, extra map[string]any, err error) {
+	title, body, extra = domain.ResolveChannelContent(ch, msg.Title, msg.Body, msg.Contents)
+	policy := msg.MissingVarPolicy.Normalize()
+	defaults := map[string]string{}
+	if msg.Extra != nil {
+		if raw, ok := msg.Extra["var_defaults"].(map[string]any); ok {
+			for k, v := range raw {
+				defaults[k] = fmt.Sprint(v)
+			}
+		}
+	}
+	rt, err1 := RenderTemplateWithPolicy(title, msg.Vars, policy, defaults)
+	rb, err2 := RenderTemplateWithPolicy(body, msg.Vars, policy, defaults)
+	if err1 != nil {
+		return rt, rb, extra, err1
+	}
+	if err2 != nil {
+		return rt, rb, extra, err2
+	}
+	return rt, rb, extra, nil
 }
 
 func (g *Gateway) allowFreq(ctx context.Context, msg domain.PushMessage, ch domain.ChannelType) (bool, string) {
@@ -278,14 +366,7 @@ func (g *Gateway) markCancelled(ctx context.Context, msg domain.PushMessage, ch 
 	if g.pushRepo == nil {
 		return nil
 	}
-	id, dup, inFlight, err := g.pushRepo.ClaimDelivery(ctx, &domain.PushRecord{
-		MainTaskID: msg.MainTaskID,
-		SubTaskID:  msg.SubTaskID,
-		UserID:     msg.UserID,
-		Channel:    ch,
-		Provider:   string(ch),
-		Content:    content,
-	})
+	id, dup, inFlight, err := g.pushRepo.ClaimDelivery(ctx, g.newRecord(msg, ch, content))
 	if err != nil {
 		return err
 	}
@@ -309,25 +390,46 @@ func (g *Gateway) checkMainGate(ctx context.Context, mainTaskID uint64, force bo
 	return nil
 }
 
-var (
-	errMainCancelled = errors.New("main task cancelled")
-	errSuppressed    = errors.New("message suppressed")
-)
+func (g *Gateway) newRecord(msg domain.PushMessage, ch domain.ChannelType, content string) *domain.PushRecord {
+	return &domain.PushRecord{
+		MainTaskID:      msg.MainTaskID,
+		SubTaskID:       msg.SubTaskID,
+		UserID:          msg.UserID,
+		Channel:         ch,
+		Provider:        string(ch),
+		Content:         content,
+		ExperimentGroup: experimentGroupFromExtra(msg.Extra),
+	}
+}
+
+func experimentGroupFromExtra(extra map[string]any) string {
+	if extra == nil {
+		return ""
+	}
+	if g, ok := extra["experiment_group"].(string); ok {
+		return g
+	}
+	return ""
+}
 
 // sendFallback 按配置顺序依次降级：前一渠道失败才尝试下一渠道，成功即停
-func (g *Gateway) sendFallback(ctx context.Context, msg domain.PushMessage, chs []domain.ChannelType, content string) error {
+func (g *Gateway) sendFallback(ctx context.Context, msg domain.PushMessage, chs []domain.ChannelType) error {
+	if msg.MaxFallback > 0 && msg.MaxFallback+1 < len(chs) {
+		chs = chs[:msg.MaxFallback+1]
+	}
 	var lastErr error
 	anySuppressed := false
 	for i, ch := range chs {
 		if err := g.checkMainGate(ctx, msg.MainTaskID, i > 0); err != nil {
 			if errors.Is(err, errMainCancelled) {
-				_ = g.markCancelled(ctx, msg, ch, content)
+				_, body, _, _ := g.resolveContent(msg, ch)
+				_ = g.markCancelled(ctx, msg, ch, body)
 				return nil
 			}
 			return err
 		}
 
-		ok, err := g.sendOne(ctx, msg, ch, content, true)
+		ok, err := g.sendOne(ctx, msg, ch, true)
 		if ok {
 			if i > 0 {
 				slog.Info("channel fallback success", "user", msg.UserID, "channel", ch, "tried", i+1)
@@ -361,7 +463,7 @@ func (g *Gateway) sendFallback(ctx context.Context, msg domain.PushMessage, chs 
 }
 
 // sendParallel 同内容多渠道并行；任一成功即用户成功，全部失败才失败
-func (g *Gateway) sendParallel(ctx context.Context, msg domain.PushMessage, chs []domain.ChannelType, content string) error {
+func (g *Gateway) sendParallel(ctx context.Context, msg domain.PushMessage, chs []domain.ChannelType) error {
 	type outcome struct {
 		ch  domain.ChannelType
 		ok  bool
@@ -373,7 +475,7 @@ func (g *Gateway) sendParallel(ctx context.Context, msg domain.PushMessage, chs 
 		wg.Add(1)
 		go func(chType domain.ChannelType) {
 			defer wg.Done()
-			ok, err := g.sendOne(ctx, msg, chType, content, true)
+			ok, err := g.sendOne(ctx, msg, chType, true)
 			ch <- outcome{ch: chType, ok: ok, err: err}
 		}(c)
 	}
@@ -414,8 +516,67 @@ func (g *Gateway) sendParallel(ctx context.Context, msg domain.PushMessage, chs 
 	return fmt.Errorf("all parallel channels failed")
 }
 
+// sendAllSuccess 并行发送，全部渠道成功才算成功
+func (g *Gateway) sendAllSuccess(ctx context.Context, msg domain.PushMessage, chs []domain.ChannelType) error {
+	type outcome struct {
+		ch  domain.ChannelType
+		ok  bool
+		err error
+	}
+	ch := make(chan outcome, len(chs))
+	var wg sync.WaitGroup
+	for _, c := range chs {
+		wg.Add(1)
+		go func(chType domain.ChannelType) {
+			defer wg.Done()
+			ok, err := g.sendOne(ctx, msg, chType, true)
+			ch <- outcome{ch: chType, ok: ok, err: err}
+		}(c)
+	}
+	wg.Wait()
+	close(ch)
+
+	var lastErr error
+	for o := range ch {
+		if o.ok {
+			continue
+		}
+		if errors.Is(o.err, errSuppressed) {
+			return fmt.Errorf("all_success: channel %s suppressed", o.ch)
+		}
+		if o.err != nil {
+			if errors.Is(o.err, domain.ErrChannelThrottled) ||
+				errors.Is(o.err, domain.ErrMainStatusUnavailable) ||
+				errors.Is(o.err, context.Canceled) ||
+				errors.Is(o.err, context.DeadlineExceeded) {
+				return o.err
+			}
+			lastErr = o.err
+			continue
+		}
+		lastErr = fmt.Errorf("all_success: channel %s failed", o.ch)
+	}
+	if lastErr != nil {
+		return lastErr
+	}
+	return nil
+}
+
 // sendOne 发送单一渠道；save=true 时写流水并做用户+活动+渠道去重。返回 (是否成功, error)
-func (g *Gateway) sendOne(ctx context.Context, msg domain.PushMessage, ch domain.ChannelType, content string, save bool) (bool, error) {
+func (g *Gateway) sendOne(ctx context.Context, msg domain.PushMessage, ch domain.ChannelType, save bool) (bool, error) {
+	title, content, chExtra, renderErr := g.resolveContent(msg, ch)
+	sendExtra := domain.MergeExtra(msg.Extra, chExtra)
+
+	if renderErr != nil && msg.MissingVarPolicy.Normalize() == domain.MissingVarError {
+		if save && g.pushRepo != nil {
+			recordID, dup, inFlight, err := g.pushRepo.ClaimDelivery(ctx, g.newRecord(msg, ch, content))
+			if err == nil && !dup && !inFlight {
+				_ = g.pushRepo.UpdateRecordStatus(ctx, recordID, domain.PushStatusFailed, "", renderErr.Error())
+			}
+		}
+		return false, renderErr
+	}
+
 	if save {
 		if g.cache != nil {
 			if ok, err := g.cache.HasDelivered(ctx, msg.MainTaskID, msg.UserID, ch); err == nil && ok {
@@ -424,14 +585,7 @@ func (g *Gateway) sendOne(ctx context.Context, msg domain.PushMessage, ch domain
 			}
 		}
 
-		recordID, dup, inFlight, err := g.pushRepo.ClaimDelivery(ctx, &domain.PushRecord{
-			MainTaskID: msg.MainTaskID,
-			SubTaskID:  msg.SubTaskID,
-			UserID:     msg.UserID,
-			Channel:    ch,
-			Provider:   string(ch),
-			Content:    content,
-		})
+		recordID, dup, inFlight, err := g.pushRepo.ClaimDelivery(ctx, g.newRecord(msg, ch, content))
 		if err != nil {
 			return false, err
 		}
@@ -477,7 +631,7 @@ func (g *Gateway) sendOne(ctx context.Context, msg domain.PushMessage, ch domain
 			return false, err
 		}
 
-		return g.doSend(ctx, msg, ch, content, true, recordID)
+		return g.doSend(ctx, msg, ch, title, content, sendExtra, true, recordID)
 	}
 	if err := g.checkUnsubscribed(ctx, msg, ch); err != nil {
 		if errors.Is(err, domain.ErrUnsubscribed) {
@@ -491,10 +645,10 @@ func (g *Gateway) sendOne(ctx context.Context, msg domain.PushMessage, ch domain
 	if err := g.waitToken(ctx, ch, msg.Priority); err != nil {
 		return false, err
 	}
-	return g.doSend(ctx, msg, ch, content, false, 0)
+	return g.doSend(ctx, msg, ch, title, content, sendExtra, false, 0)
 }
 
-func (g *Gateway) doSend(ctx context.Context, msg domain.PushMessage, ch domain.ChannelType, content string, save bool, recordID uint64) (bool, error) {
+func (g *Gateway) doSend(ctx context.Context, msg domain.PushMessage, ch domain.ChannelType, title, content string, extra map[string]any, save bool, recordID uint64) (bool, error) {
 	sender, err := g.channels.Get(ch)
 	if err != nil {
 		if save && recordID > 0 {
@@ -507,10 +661,10 @@ func (g *Gateway) doSend(ctx context.Context, msg domain.PushMessage, ch domain.
 		MsgID:   fmt.Sprintf("%s-%s", msg.MsgID, ch),
 		UserID:  msg.UserID,
 		Channel: ch,
-		Title:   msg.Title,
+		Title:   title,
 		Content: content,
 		Vars:    msg.Vars,
-		Extra:   msg.Extra,
+		Extra:   extra,
 	}
 
 	var result *domain.SendResult

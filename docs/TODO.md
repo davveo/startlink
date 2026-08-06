@@ -1,6 +1,6 @@
 # Starlink 功能待办清单（TODO）
 
-更新日期：2026-08-05
+更新日期：2026-08-06
 
 基于代码与 README「已知限制」整理。按优先级推进；勾选表示已完成。
 
@@ -127,15 +127,26 @@
 
 ## 待办 · 模板与投放能力
 
-- [ ] 多渠道模板内容：同一模板为 App Push、短信、邮件等分别维护标题、正文和扩展字段
-- [ ] 模板变量 Schema：声明必填变量、类型、默认值、示例值和敏感等级，创建活动时提前校验
-- [ ] 模板预览与测试渲染：明确缺失变量策略（报错、保留或默认值）
-- [ ] 模板版本历史与回滚：保存变更版本、审核记录、差异和回滚入口
-- [ ] 多语言与地区版本：按用户 locale 选择模板，支持默认语言回退
-- [ ] 用户时区投放：静默时段和发送窗口按用户时区执行
-- [ ] 实验平台化：增加 `experiment_id`、对照组、分层比例和结果指标；抽样哈希加入实验或活动盐值并持久化分组
-- [ ] 活动过期时间：增加 `expire_at`，超时队列消息标记为 `expired`，不再调用渠道
-- [ ] 发送策略扩展：支持所有渠道均成功、条件路由、成本优先和最大降级次数
+- [x] 多渠道模板内容：同一模板为 App Push、短信、邮件等分别维护标题、正文和扩展字段
+  - `Template.contents` JSON；活动快照 `template_contents`；Gateway 按渠道取内容，缺省回退 `body`+活动 `title`
+- [x] 模板变量 Schema：声明必填变量、类型、默认值、示例值和敏感等级，创建活动时提前校验
+  - `var_schema`；Create / Preflight / DryRun / Preview 校验
+- [x] 模板预览与测试渲染：明确缺失变量策略（报错、保留或默认值）
+  - `missing_var_policy`=`error|keep|default|empty`；`RenderTemplateWithPolicy`；`POST /templates/preview`
+- [x] 模板版本历史与回滚：保存变更版本、审核记录、差异和回滚入口
+  - 表 `template_versions`（`revision`）；更新/审核落快照；`GET .../versions`、`POST .../rollback`→draft
+- [x] 多语言与地区版本：按用户 locale 选择模板，支持默认语言回退
+  - `default_locale` + `locales`；Resolve：user → default → root body
+- [x] 用户时区投放：静默时段和发送窗口按用户时区执行
+  - `TargetUser/PushMessage.Timezone`；有 TZ 用用户时区，否则服务器本地
+- [x] 实验平台化：增加 `experiment_id`、对照组、分层比例和结果指标；抽样哈希加入实验或活动盐值并持久化分组
+  - MainTask 实验字段；盐值哈希；`ExperimentAssignment` 落库；流水带 `experiment_group`
+  - `GET /api/v1/campaigns/:id/experiment` 聚合看板；前端「分析」页实验指标表
+- [x] 活动过期时间：增加 `expire_at`，超时队列消息标记为 `expired`，不再调用渠道
+  - Gateway 过期写 `PushStatusExpired` 并 ACK（不返 Err）；`ClaimDelivery` 走 `newRecord`
+- [x] 发送策略扩展：支持所有渠道均成功、条件路由、成本优先和最大降级次数
+  - `channel_mode=all_success|conditional|cost_priority`；`max_fallback`
+  - `channel_routes` / `channel_costs` 落库；Gateway `ResolveSendChannels`；前端创建页 JSON 编辑
 
 ---
 
@@ -175,7 +186,7 @@
 2. ~~第二期正确性补强（退订终检、状态 fail-closed、回执事务/唯一键、provider 消歧、幂等顺序、分页保护、Extra、HTTP 限制、抑制态）~~ ✅
 3. API 与运营：活动列表、预检、测试发送、投递漏斗、DLQ 运维 API
 4. 安全与平台：~~登录门禁~~（租户/RBAC 仍待）、回执验签、Webhook outbox、独立迁移、Readiness、指标
-5. 模板与投放：多渠道模板、版本历史、多语言、用户时区、实验平台
+5. ~~模板与投放：多渠道模板、版本历史、多语言、用户时区、实验平台~~ ✅
 6. 多租户、数据归档、隐私治理、集成/E2E/容量测试
 
 ---

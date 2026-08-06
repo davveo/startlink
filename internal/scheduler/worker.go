@@ -243,10 +243,12 @@ func (w *Worker) loopClaim(ctx context.Context, idx int) {
 }
 
 type subPayload struct {
-	UserIDs  []string                        `json:"user_ids"`
-	Vars     map[string]map[string]string    `json:"vars"`
-	Channels map[string][]domain.ChannelType `json:"channels"`
-	Extras   map[string]map[string]any       `json:"extras"`
+	UserIDs   []string                        `json:"user_ids"`
+	Vars      map[string]map[string]string    `json:"vars"`
+	Channels  map[string][]domain.ChannelType `json:"channels"`
+	Extras    map[string]map[string]any       `json:"extras"`
+	Locales   map[string]string               `json:"locales"`
+	Timezones map[string]string               `json:"timezones"`
 }
 
 var (
@@ -285,6 +287,8 @@ func (w *Worker) processSubTask(ctx context.Context, st *domain.SubTask) error {
 	taskChs := main.ChannelList()
 	chMode := main.EffectiveChannelMode()
 	prio := main.Priority.Normalize()
+	rootContents := main.ContentsMap()
+	rootLocales := main.LocalesMap()
 	for _, uid := range payload.UserIDs {
 		chs := taskChs
 		if userChs, ok := payload.Channels[uid]; ok && len(userChs) > 0 {
@@ -294,28 +298,45 @@ func (w *Worker) processSubTask(ctx context.Context, st *domain.SubTask) error {
 			continue
 		}
 		mode := chMode
-		if len(chs) <= 1 {
+		if len(chs) <= 1 && mode != domain.ChannelModeConditional && mode != domain.ChannelModeCostPriority {
 			mode = domain.ChannelModeSingle
 		}
 		vars := payload.Vars[uid]
 		// 覆盖顺序：活动 Payload 为底，用户 Extra 覆盖同名键（手机号/token 等以用户为准）
 		merged := domain.MergeExtra(campaignExtra, payload.Extras[uid])
+		locale := ""
+		if payload.Locales != nil {
+			locale = payload.Locales[uid]
+		}
+		tz := ""
+		if payload.Timezones != nil {
+			tz = payload.Timezones[uid]
+		}
+		body, contents := domain.ResolveLocaleContent(main.TemplateBody, rootContents, main.DefaultLocale, rootLocales, locale)
 		msgs = append(msgs, domain.PushMessage{
-			MsgID:       fmt.Sprintf("%d-%d-%s", st.MainTaskID, st.ID, uid),
-			MainTaskID:  st.MainTaskID,
-			SubTaskID:   st.ID,
-			UserID:      uid,
-			Channel:     chs[0],
-			Channels:    chs,
-			ChannelMode: mode,
-			TemplateID:  main.TemplateID,
-			Title:       main.Title,
-			Body:        main.TemplateBody,
-			Vars:        vars,
-			Extra:       merged,
-			BizScene:    main.BizScene,
-			Priority:    prio,
-			CreatedAt:   now,
+			MsgID:            fmt.Sprintf("%d-%d-%s", st.MainTaskID, st.ID, uid),
+			MainTaskID:       st.MainTaskID,
+			SubTaskID:        st.ID,
+			UserID:           uid,
+			Channel:          chs[0],
+			Channels:         chs,
+			ChannelMode:      mode,
+			TemplateID:       main.TemplateID,
+			Title:            main.Title,
+			Body:             body,
+			Contents:         contents,
+			Vars:             vars,
+			Extra:            merged,
+			BizScene:         main.BizScene,
+			Priority:         prio,
+			Locale:           locale,
+			Timezone:         tz,
+			MissingVarPolicy: main.MissingVarPolicy,
+			ExpireAt:         main.ExpireAt,
+			MaxFallback:      main.MaxFallback,
+			ChannelRoutes:    main.ChannelRoutes(),
+			ChannelCosts:     main.ChannelCosts(),
+			CreatedAt:        now,
 		})
 	}
 

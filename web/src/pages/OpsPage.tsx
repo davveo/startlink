@@ -1,9 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Link, useParams, useSearchParams } from 'react-router-dom'
+import { useParams, useSearchParams } from 'react-router-dom'
 import { ApiError, api } from '../api/client'
-import type { ExportJob, FailureAgg, FunnelView, PushRecord } from '../api/types'
-import { useAuth } from '../auth/AuthContext'
-import { StatusChip } from '../components/StatusChip'
+import type { ExperimentMetrics, FailureAgg, FunnelView } from '../api/types'
 import {
   BtnRow,
   Button,
@@ -15,7 +13,6 @@ import {
   PageHead,
   Panel,
   PanelTitle,
-  Select,
   Stat,
   TableWrap,
   Td,
@@ -23,21 +20,20 @@ import {
   Toast,
 } from '../components/ui'
 
+function pct(rate: number) {
+  if (!Number.isFinite(rate)) return '-'
+  return `${(rate * 100).toFixed(1)}%`
+}
+
 export function OpsPage() {
-  const { user } = useAuth()
   const { id: idParam } = useParams()
   const [search] = useSearchParams()
   const initialId = idParam || search.get('task') || ''
   const [taskId, setTaskId] = useState(initialId)
   const [funnel, setFunnel] = useState<FunnelView | null>(null)
   const [failures, setFailures] = useState<FailureAgg[]>([])
-  const [records, setRecords] = useState<PushRecord[]>([])
-  const [recordTotal, setRecordTotal] = useState(0)
-  const [userFilter, setUserFilter] = useState('')
-  const [statusFilter, setStatusFilter] = useState('')
-  const [exportJob, setExportJob] = useState<ExportJob | null>(null)
+  const [experiment, setExperiment] = useState<ExperimentMetrics | null>(null)
   const [err, setErr] = useState('')
-  const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
 
   const load = useCallback(async () => {
@@ -46,80 +42,63 @@ export function OpsPage() {
     setBusy(true)
     setErr('')
     try {
-      const [f, fail, rec] = await Promise.all([
+      const [f, fail, exp] = await Promise.all([
         api.getFunnel(id),
         api.getFailures(id),
-        api.listRecords(id, { user_id: userFilter || undefined, status: statusFilter || undefined, page_size: 50 }),
+        api.getExperimentMetrics(id),
       ])
       setFunnel(f)
       setFailures(fail.items ?? [])
-      setRecords(rec.items ?? [])
-      setRecordTotal(rec.total ?? 0)
+      setExperiment(exp)
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : '加载失败')
     } finally {
       setBusy(false)
     }
-  }, [taskId, userFilter, statusFilter])
+  }, [taskId])
 
   useEffect(() => {
     if (Number(taskId) > 0) void load()
   }, [load, taskId])
 
-  async function startExport(kind: string) {
-    const id = Number(taskId)
-    if (!id) return
-    setBusy(true)
-    setErr('')
-    try {
-      const job = await api.createExport(id, kind, user?.username)
-      setExportJob(job)
-      setMsg(`导出任务 #${job.id} 已创建`)
-      const timer = window.setInterval(async () => {
-        try {
-          const j = await api.getExport(job.id)
-          setExportJob(j)
-          if (j.status === 'success' || j.status === 'failed') {
-            window.clearInterval(timer)
-            if (j.status === 'success') setMsg(`导出完成，共 ${j.row_count} 行`)
-            else setErr(j.error_msg || '导出失败')
-          }
-        } catch {
-          window.clearInterval(timer)
-        }
-      }, 1000)
-    } catch (e) {
-      setErr(e instanceof ApiError ? e.message : '导出失败')
-    } finally {
-      setBusy(false)
-    }
-  }
-
   const p = funnel?.pipeline
+  const taskNum = Number(taskId)
+  const groups = experiment?.groups ?? []
 
   return (
     <div>
       <PageHead
         title="投递分析"
-        description="漏斗、失败归因、用户流水与导出。不含 DLQ/PEL 运维。"
+        description="漏斗、失败归因与实验分组指标。用户级流水请到独立列表查看。"
         actions={
-          <ButtonLink to="/tasks" variant="ghost">
-            返回任务
-          </ButtonLink>
+          <BtnRow>
+            {taskNum > 0 ? (
+              <ButtonLink to={`/ops/${taskNum}/records`} variant="primary">
+                用户流水
+              </ButtonLink>
+            ) : null}
+            <ButtonLink to="/tasks" variant="ghost">
+              返回任务
+            </ButtonLink>
+          </BtnRow>
         }
       />
       {err ? <Toast kind="error">{err}</Toast> : null}
-      {msg ? <Toast kind="ok">{msg}</Toast> : null}
 
       <Panel>
         <div className="grid gap-3 md:grid-cols-3">
-          <Field label="主任务 ID">
+          <Field label="主任务 ID" hint="从任务列表点「分析」会自动带入。">
             <Input value={taskId} onChange={(e) => setTaskId(e.target.value)} placeholder="task id" />
           </Field>
-          <div className="flex items-end pb-3.5">
+          <div className="flex items-end gap-2 pb-3.5">
             <Button variant="ink" type="button" disabled={busy} onClick={() => void load()}>
               加载分析
             </Button>
+            {taskNum > 0 ? (
+              <ButtonLink to={`/ops/${taskNum}/records`} variant="ghost">
+                查看流水
+              </ButtonLink>
+            ) : null}
           </div>
         </div>
       </Panel>
@@ -149,6 +128,56 @@ export function OpsPage() {
       ) : null}
 
       <Panel className="mt-4">
+        <PanelTitle>
+          实验指标看板
+          {experiment?.experiment_id ? (
+            <span className="ml-2 text-sm font-normal text-muted">
+              experiment_id=<Mono>{experiment.experiment_id}</Mono>
+            </span>
+          ) : null}
+        </PanelTitle>
+        <TableWrap>
+          <thead>
+            <tr>
+              <Th>分组</Th>
+              <Th>分配用户</Th>
+              <Th>有流水</Th>
+              <Th>成功</Th>
+              <Th>失败</Th>
+              <Th>抑制</Th>
+              <Th>sent</Th>
+              <Th>open/delivered</Th>
+              <Th>click</Th>
+              <Th>failed 流水</Th>
+              <Th>成功率</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {groups.map((g) => (
+              <tr key={g.group}>
+                <Td>
+                  <Mono>{g.group}</Mono>
+                </Td>
+                <Td>{g.assigned_users}</Td>
+                <Td>{g.reach_users}</Td>
+                <Td>{g.success_users}</Td>
+                <Td>{g.fail_users}</Td>
+                <Td>{g.suppressed_users}</Td>
+                <Td>{g.sent_records}</Td>
+                <Td>{g.delivered_records}</Td>
+                <Td>{g.clicked_records}</Td>
+                <Td>{g.failed_records}</Td>
+                <Td>{pct(g.success_rate)}</Td>
+              </tr>
+            ))}
+          </tbody>
+        </TableWrap>
+        {groups.length === 0 ? (
+          <Empty>暂无实验分组数据（创建活动时填写 experiment_id / 对照组比例后拆分会写入 assignment）</Empty>
+        ) : null}
+      </Panel>
+
+      <Panel className="mt-4">
         <PanelTitle>失败分析</PanelTitle>
         <TableWrap>
           <thead>
@@ -175,87 +204,19 @@ export function OpsPage() {
           </tbody>
         </TableWrap>
         {failures.length === 0 ? <Empty>暂无失败汇总</Empty> : null}
-      </Panel>
-
-      <Panel className="mt-4">
-        <PanelTitle>用户流水 · 共 {recordTotal}</PanelTitle>
-        <div className="grid gap-3 md:grid-cols-3">
-          <Field label="user_id">
-            <Input value={userFilter} onChange={(e) => setUserFilter(e.target.value)} />
-          </Field>
-          <Field label="status">
-            <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-              <option value="">全部</option>
-              <option value="failed">failed</option>
-              <option value="sent">sent</option>
-              <option value="delivered">delivered</option>
-              <option value="suppressed">suppressed</option>
-            </Select>
-          </Field>
-          <div className="flex items-end gap-2 pb-3.5">
-            <Button variant="ink" type="button" disabled={busy} onClick={() => void load()}>
-              查询
-            </Button>
-            <Button variant="ghost" type="button" disabled={busy} onClick={() => void startExport('records')}>
-              异步导出
-            </Button>
-            <a
-              className="inline-flex items-center justify-center rounded-full border border-line px-4 py-2 text-sm font-semibold"
-              href={api.exportSyncUrl(Number(taskId) || 0, 'records')}
-            >
-              同步 CSV
-            </a>
-          </div>
-        </div>
-        {exportJob ? (
-          <p className="mb-3 text-sm text-muted">
-            导出 #{exportJob.id} <StatusChip status={exportJob.status} />{' '}
-            {exportJob.file_url ? (
-              <a className="text-teal-deep underline" href={exportJob.file_url}>
-                下载
-              </a>
-            ) : null}
-          </p>
+        {taskNum > 0 ? (
+          <BtnRow className="mt-4">
+            <ButtonLink to={`/ops/${taskNum}/records`} variant="ink">
+              查看用户流水
+            </ButtonLink>
+            <ButtonLink to={`/tasks/${taskNum}/subtasks`} variant="ghost">
+              查看子任务
+            </ButtonLink>
+            <ButtonLink to={`/progress?task=${taskNum}`} variant="ghost">
+              活动进度
+            </ButtonLink>
+          </BtnRow>
         ) : null}
-        <TableWrap>
-          <thead>
-            <tr>
-              <Th>ID</Th>
-              <Th>用户</Th>
-              <Th>渠道</Th>
-              <Th>状态</Th>
-              <Th>错误</Th>
-            </tr>
-          </thead>
-          <tbody>
-            {records.map((r) => (
-              <tr key={r.id}>
-                <Td>
-                  <Mono>{r.id}</Mono>
-                </Td>
-                <Td>
-                  <Mono>{r.user_id}</Mono>
-                </Td>
-                <Td>
-                  <Mono>{r.channel}</Mono>
-                </Td>
-                <Td>
-                  <StatusChip status={r.status} />
-                </Td>
-                <Td className="max-w-xs truncate text-xs text-rose">{r.error_msg || '-'}</Td>
-              </tr>
-            ))}
-          </tbody>
-        </TableWrap>
-        {records.length === 0 ? <Empty>暂无流水</Empty> : null}
-        <BtnRow className="mt-3">
-          <Link className="text-sm text-teal-deep underline" to={`/tasks/${taskId}/subtasks`}>
-            查看子任务
-          </Link>
-          <Link className="text-sm text-teal-deep underline" to={`/campaigns?task=${taskId}`}>
-            活动进度
-          </Link>
-        </BtnRow>
       </Panel>
     </div>
   )

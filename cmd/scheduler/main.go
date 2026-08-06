@@ -31,7 +31,7 @@ func main() {
 	}
 
 	agg := scheduler.NewAggregator(infra.Tasks, infra.AggCache, infra.Webhook, infra.Push)
-	splitter := scheduler.NewSplitter(infra.Tasks, infra.Audience, infra.Limiter, infra.Cfg.Scheduler.BatchSize)
+	splitter := scheduler.NewSplitter(infra.Tasks, infra.Audience, infra.Limiter, infra.Cfg.Scheduler.BatchSize, infra.Push)
 	worker := scheduler.NewWorker(
 		infra.Tasks,
 		infra.MQ,

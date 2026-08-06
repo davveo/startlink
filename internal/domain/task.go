@@ -7,27 +7,33 @@ import (
 
 // MainTask 主任务：一次营销推送活动
 type MainTask struct {
-	ID            uint64      `gorm:"primaryKey;autoIncrement" json:"id"`
-	BizID         string      `gorm:"size:64;uniqueIndex;not null" json:"biz_id"`
-	BizScene      string      `gorm:"size:64;index;not null" json:"biz_scene"`
-	Priority      Priority    `gorm:"size:16;not null;index;default:normal" json:"priority"` // high=事务通知 normal=营销
-	Title         string      `gorm:"size:256;not null" json:"title"`
-	Channel       ChannelType `gorm:"size:32;not null;index" json:"channel"`
-	Channels      string      `gorm:"type:json" json:"channels,omitempty"`
-	ChannelMode   ChannelMode `gorm:"size:16;not null;default:single" json:"channel_mode"`
-	TemplateID    string      `gorm:"size:64" json:"template_id"`
-	TemplateBody  string      `gorm:"type:text" json:"template_body"`
-	AudienceRef   string      `gorm:"size:128;not null" json:"audience_ref"`
-	AudienceExtra string      `gorm:"type:json" json:"audience_extra,omitempty"`
-	Payload       string      `gorm:"type:json" json:"payload,omitempty"`
-	TotalCount    int64       `gorm:"not null;default:0" json:"total_count"`
-	SuccessCount  int64       `gorm:"not null;default:0" json:"success_count"`
-	FailCount     int64       `gorm:"not null;default:0" json:"fail_count"`
-	SubTaskTotal  int         `gorm:"not null;default:0" json:"sub_task_total"`
-	SubTaskDone   int         `gorm:"not null;default:0" json:"sub_task_done"`
-	Status        TaskStatus  `gorm:"size:32;not null;index;default:pending" json:"status"`
-	Version       int64       `gorm:"not null;default:0" json:"version"`
-	WebhookURL    string      `gorm:"size:512" json:"webhook_url,omitempty"`
+	ID           uint64      `gorm:"primaryKey;autoIncrement" json:"id"`
+	BizID        string      `gorm:"size:64;uniqueIndex;not null" json:"biz_id"`
+	BizScene     string      `gorm:"size:64;index;not null" json:"biz_scene"`
+	Priority     Priority    `gorm:"size:16;not null;index;default:normal" json:"priority"` // high=事务通知 normal=营销
+	Title        string      `gorm:"size:256;not null" json:"title"`
+	Channel      ChannelType `gorm:"size:32;not null;index" json:"channel"`
+	Channels     string      `gorm:"type:json" json:"channels,omitempty"`
+	ChannelMode  ChannelMode `gorm:"size:16;not null;default:single" json:"channel_mode"`
+	TemplateID   string      `gorm:"size:64" json:"template_id"`
+	TemplateBody string      `gorm:"type:text" json:"template_body"`
+	// TemplateContents 模板分渠道内容快照
+	TemplateContents *string `gorm:"column:template_contents;type:json" json:"-"`
+	// MissingVarPolicy 快照自模板
+	MissingVarPolicy MissingVarPolicy `gorm:"size:16;not null;default:empty" json:"missing_var_policy"`
+	DefaultLocale    string           `gorm:"size:16" json:"default_locale,omitempty"`
+	TemplateLocales  *string          `gorm:"column:template_locales;type:json" json:"-"`
+	AudienceRef      string           `gorm:"size:128;not null" json:"audience_ref"`
+	AudienceExtra    string           `gorm:"type:json" json:"audience_extra,omitempty"`
+	Payload          string           `gorm:"type:json" json:"payload,omitempty"`
+	TotalCount       int64            `gorm:"not null;default:0" json:"total_count"`
+	SuccessCount     int64            `gorm:"not null;default:0" json:"success_count"`
+	FailCount        int64            `gorm:"not null;default:0" json:"fail_count"`
+	SubTaskTotal     int              `gorm:"not null;default:0" json:"sub_task_total"`
+	SubTaskDone      int              `gorm:"not null;default:0" json:"sub_task_done"`
+	Status           TaskStatus       `gorm:"size:32;not null;index;default:pending" json:"status"`
+	Version          int64            `gorm:"not null;default:0" json:"version"`
+	WebhookURL       string           `gorm:"size:512" json:"webhook_url,omitempty"`
 	// CreatedBy 业务负责人/创建人（非拆分租约）
 	CreatedBy string `gorm:"size:64;index" json:"created_by,omitempty"`
 	// CopiedFromID 复制来源主任务
@@ -40,6 +46,18 @@ type MainTask struct {
 	SendWindowsJSON string `gorm:"type:json;column:send_windows" json:"send_windows,omitempty"`
 	// PaceQPS 本活动入队速率上限；0 不限制
 	PaceQPS int `gorm:"not null;default:0" json:"pace_qps,omitempty"`
+	// ExpireAt 活动过期时间；超时消息标记 expired，不调渠道
+	ExpireAt *time.Time `gorm:"index" json:"expire_at,omitempty"`
+	// ExperimentID / ExperimentSalt / ExperimentControlPercent：实验平台化抽样
+	ExperimentID             string `gorm:"size:64;index" json:"experiment_id,omitempty"`
+	ExperimentSalt           string `gorm:"size:128" json:"experiment_salt,omitempty"`
+	ExperimentControlPercent int    `gorm:"not null;default:0" json:"experiment_control_percent,omitempty"`
+	// MaxFallback fallback 模式下最大降级次数（不含首渠）；0=不限制
+	MaxFallback int `gorm:"not null;default:0" json:"max_fallback,omitempty"`
+	// ChannelRoutesJSON 条件路由规则（channel_mode=conditional）
+	ChannelRoutesJSON *string `gorm:"type:json;column:channel_routes" json:"channel_routes,omitempty"`
+	// ChannelCostsJSON 渠道成本（channel_mode=cost_priority），如 {"sms":10,"inbox":1}
+	ChannelCostsJSON *string `gorm:"type:json;column:channel_costs" json:"channel_costs,omitempty"`
 	// SplitOwner / SplitLeaseAt：拆分租约，防止 pending→running 后崩溃导致永久卡单
 	SplitOwner   string     `gorm:"size:64;index" json:"split_owner,omitempty"`
 	SplitLeaseAt *time.Time `gorm:"index" json:"split_lease_at,omitempty"`
@@ -51,6 +69,22 @@ type MainTask struct {
 }
 
 func (MainTask) TableName() string { return "main_tasks" }
+
+// ChannelRoutes 条件路由规则
+func (t *MainTask) ChannelRoutes() []ChannelRouteRule {
+	if t == nil {
+		return nil
+	}
+	return ParseChannelRoutesJSON(JSONColumnValue(t.ChannelRoutesJSON, ""))
+}
+
+// ChannelCosts 渠道成本表
+func (t *MainTask) ChannelCosts() map[ChannelType]int {
+	if t == nil {
+		return nil
+	}
+	return ParseChannelCostsJSON(JSONColumnValue(t.ChannelCostsJSON, ""))
+}
 
 // SendWindows 解析分时窗
 func (t *MainTask) SendWindows() []SendWindow {
@@ -85,6 +119,9 @@ func (t *MainTask) ChannelList() []ChannelType {
 // EffectiveChannelMode 有效渠道模式
 func (t *MainTask) EffectiveChannelMode() ChannelMode {
 	mode := t.ChannelMode.Normalize()
+	if mode == ChannelModeConditional || mode == ChannelModeCostPriority {
+		return mode
+	}
 	chs := t.ChannelList()
 	if len(chs) <= 1 {
 		return ChannelModeSingle
@@ -93,6 +130,22 @@ func (t *MainTask) EffectiveChannelMode() ChannelMode {
 		return ChannelModeFallback
 	}
 	return mode
+}
+
+// ContentsMap 解析模板分渠道快照
+func (t *MainTask) ContentsMap() map[string]ChannelContent {
+	if t == nil {
+		return nil
+	}
+	return ParseContentsJSON(JSONColumnValue(t.TemplateContents, ""))
+}
+
+// LocalesMap 解析多语言快照
+func (t *MainTask) LocalesMap() map[string]LocaleContent {
+	if t == nil {
+		return nil
+	}
+	return ParseLocalesJSON(JSONColumnValue(t.TemplateLocales, ""))
 }
 
 // SubTask 子任务：按用户分片，支持多 worker 并发认领
@@ -133,12 +186,26 @@ type PushRecord struct {
 	ProviderID *string    `gorm:"size:128;uniqueIndex:uk_provider_ref" json:"provider_id,omitempty"`
 	ErrorMsg   string     `gorm:"size:512" json:"error_msg,omitempty"`
 	IsTest     bool       `gorm:"not null;default:false;index" json:"is_test"`
-	SentAt     *time.Time `json:"sent_at,omitempty"`
-	CreatedAt  time.Time  `json:"created_at"`
-	UpdatedAt  time.Time  `json:"updated_at"`
+	// ExperimentGroup control|treatment（实验看板聚合）
+	ExperimentGroup string     `gorm:"size:32;index" json:"experiment_group,omitempty"`
+	SentAt          *time.Time `json:"sent_at,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
 }
 
 func (PushRecord) TableName() string { return "push_records" }
+
+// ExperimentAssignment 实验分组落库（含对照组，便于指标看板）
+type ExperimentAssignment struct {
+	ID           uint64    `gorm:"primaryKey;autoIncrement" json:"id"`
+	MainTaskID   uint64    `gorm:"uniqueIndex:uk_exp_task_user;index;not null" json:"main_task_id"`
+	UserID       string    `gorm:"size:64;uniqueIndex:uk_exp_task_user;not null" json:"user_id"`
+	ExperimentID string    `gorm:"size:64;index" json:"experiment_id,omitempty"`
+	GroupName    string    `gorm:"size:32;not null;index;column:group_name" json:"group"` // control|treatment
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+func (ExperimentAssignment) TableName() string { return "experiment_assignments" }
 
 // ProviderIDValue 安全读取 provider_id
 func (r *PushRecord) ProviderIDValue() string {
@@ -169,7 +236,7 @@ type ExportJob struct {
 	MainTaskID uint64     `gorm:"index;not null" json:"main_task_id"`
 	Kind       string     `gorm:"size:32;not null;index" json:"kind"`                   // records | failures
 	Status     string     `gorm:"size:32;not null;index;default:pending" json:"status"` // pending|running|success|failed
-	FilterJSON string     `gorm:"type:json" json:"filter_json,omitempty"`
+	FilterJSON *string    `gorm:"type:json" json:"filter_json,omitempty"`
 	FilePath   string     `gorm:"size:512" json:"file_path,omitempty"`
 	FileURL    string     `gorm:"size:512" json:"file_url,omitempty"`
 	RowCount   int64      `gorm:"not null;default:0" json:"row_count"`

@@ -37,13 +37,10 @@ export function HomePage() {
           管理模板审核、创建投放活动、追踪进度与失败重推。对接现有 /api/v1，适合本地联调与运营试跑。
         </p>
         <BtnRow className="mt-2">
-          <ButtonLink to="/campaigns" variant="primary">
-            创建活动
-          </ButtonLink>
-          <ButtonLink to="/tasks" variant="ink">
+          <ButtonLink to="/tasks" variant="primary">
             任务列表
           </ButtonLink>
-          <ButtonLink to="/templates" variant="ghost">
+          <ButtonLink to="/templates" variant="ink">
             模板中心
           </ButtonLink>
         </BtnRow>

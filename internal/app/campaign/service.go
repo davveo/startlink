@@ -232,6 +232,20 @@ func (s *Service) Create(ctx context.Context, in domain.CreateCampaignInput) (*C
 	if !tpl.Status.Usable() {
 		return nil, errcode.TemplateNotUsable
 	}
+	if len(tpl.VarSchema) > 0 {
+		// 创建时用 payload 中的 vars 做 schema 预检（可选）；无则仅检查 schema 自身完整性
+		sample := map[string]string{}
+		if in.Payload != nil {
+			if raw, ok := in.Payload["vars"].(map[string]any); ok {
+				for k, v := range raw {
+					sample[k] = fmt.Sprint(v)
+				}
+			}
+		}
+		if _, errs := domain.ValidateVarsAgainstSchema(tpl.VarSchema, sample); len(errs) > 0 && len(sample) > 0 {
+			return nil, errcode.New(40001, "var_schema: "+strings.Join(errs, "; "))
+		}
+	}
 
 	prio := domain.ResolvePriority(in.Priority, in.BizScene, s.highBizScenes)
 
@@ -245,31 +259,49 @@ func (s *Service) Create(ctx context.Context, in domain.CreateCampaignInput) (*C
 	payload, _ := json.Marshal(in.Payload)
 	chsJSON, _ := json.Marshal(chList)
 	windowsJSON, _ := json.Marshal(in.SendWindows)
+	if string(windowsJSON) == "null" {
+		windowsJSON = []byte("[]")
+	}
 
 	status := domain.TaskStatusPending
 	if in.AsDraft {
 		status = domain.TaskStatusDraft
 	}
 
+	tpl.HydrateJSON()
+	contentsCol := domain.MarshalJSONColumn(tpl.Contents, false)
+	localesCol := domain.MarshalJSONColumn(tpl.Locales, false)
+
 	task := &domain.MainTask{
-		BizID:           in.BizID,
-		BizScene:        in.BizScene,
-		Priority:        prio,
-		Title:           in.Title,
-		Channel:         primary,
-		Channels:        string(chsJSON),
-		ChannelMode:     mode,
-		TemplateID:      tpl.Code,
-		TemplateBody:    tpl.Body, // 快照，后续改模板不影响已创建活动
-		AudienceRef:     in.AudienceRef,
-		AudienceExtra:   string(extra),
-		Payload:         string(payload),
-		WebhookURL:      in.WebhookURL,
-		SendWindowsJSON: string(windowsJSON),
-		PaceQPS:         in.PaceQPS,
-		CreatedBy:       in.CreatedBy,
-		Status:          status,
-		ScheduledAt:     in.ScheduledAt,
+		BizID:                    in.BizID,
+		BizScene:                 in.BizScene,
+		Priority:                 prio,
+		Title:                    in.Title,
+		Channel:                  primary,
+		Channels:                 string(chsJSON),
+		ChannelMode:              mode,
+		TemplateID:               tpl.Code,
+		TemplateBody:             tpl.Body,
+		TemplateContents:         contentsCol,
+		MissingVarPolicy:         tpl.MissingVarPolicy.Normalize(),
+		DefaultLocale:            tpl.DefaultLocale,
+		TemplateLocales:          localesCol,
+		AudienceRef:              in.AudienceRef,
+		AudienceExtra:            string(extra),
+		Payload:                  string(payload),
+		WebhookURL:               in.WebhookURL,
+		SendWindowsJSON:          string(windowsJSON),
+		PaceQPS:                  in.PaceQPS,
+		ExpireAt:                 in.ExpireAt,
+		ExperimentID:             in.ExperimentID,
+		ExperimentSalt:           in.ExperimentSalt,
+		ExperimentControlPercent: in.ExperimentControlPercent,
+		MaxFallback:              in.MaxFallback,
+		ChannelRoutesJSON:        domain.MarshalChannelRoutes(in.ChannelRoutes),
+		ChannelCostsJSON:         domain.MarshalChannelCosts(in.ChannelCosts),
+		CreatedBy:                in.CreatedBy,
+		Status:                   status,
+		ScheduledAt:              in.ScheduledAt,
 	}
 	if err := s.tasks.CreateMainTask(ctx, task); err != nil {
 		// 并发创建同一 biz_id：回查已有任务（唯一索引兜底）
@@ -294,10 +326,12 @@ func campaignRequestMatches(exist *domain.MainTask, in domain.CreateCampaignInpu
 		return false
 	}
 	wantMode := mode.Normalize()
-	if len(chList) <= 1 {
-		wantMode = domain.ChannelModeSingle
-	} else if wantMode == domain.ChannelModeSingle {
-		wantMode = domain.ChannelModeFallback
+	if wantMode != domain.ChannelModeConditional && wantMode != domain.ChannelModeCostPriority {
+		if len(chList) <= 1 {
+			wantMode = domain.ChannelModeSingle
+		} else if wantMode == domain.ChannelModeSingle {
+			wantMode = domain.ChannelModeFallback
+		}
 	}
 	return exist.EffectiveChannelMode() == wantMode
 }

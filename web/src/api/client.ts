@@ -93,10 +93,16 @@ export const api = {
     return request<TemplateListResult>(`/api/v1/templates?${params}`)
   },
 
+  getTemplate: (id: number) => request<Template>(`/api/v1/templates/${id}`),
+
   createTemplate: (body: {
     code?: string
     name: string
-    body: string
+    body?: string
+    contents?: Record<string, { title?: string; body?: string }>
+    var_schema?: { name: string; type?: string; required?: boolean; default?: string; example?: string; sensitive?: boolean }[]
+    missing_var_policy?: string
+    default_locale?: string
     biz_scene?: string
     channel_hint?: ChannelType
     created_by?: string
@@ -111,6 +117,10 @@ export const api = {
     body: {
       name?: string
       body?: string
+      contents?: Record<string, { title?: string; body?: string }>
+      var_schema?: { name: string; type?: string; required?: boolean; default?: string; example?: string; sensitive?: boolean }[]
+      missing_var_policy?: string
+      default_locale?: string
       biz_scene?: string
       channel_hint?: ChannelType
       version?: number
@@ -120,6 +130,21 @@ export const api = {
     request<Template>(`/api/v1/templates/${id}`, {
       method: 'PUT',
       body: JSON.stringify(body),
+    }),
+
+  previewTemplate: (body: Record<string, unknown>) =>
+    request<import('./types').TemplatePreviewResult>('/api/v1/templates/preview', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  listTemplateVersions: (id: number) =>
+    request<{ items: unknown[] }>(`/api/v1/templates/${id}/versions`),
+
+  rollbackTemplate: (id: number, revision: number, updated_by?: string, version?: number) =>
+    request<Template>(`/api/v1/templates/${id}/rollback`, {
+      method: 'POST',
+      body: JSON.stringify({ revision, updated_by, version }),
     }),
 
   deleteTemplate: (id: number) =>
@@ -261,6 +286,9 @@ export const api = {
 
   getFailures: (id: number) =>
     request<{ task_id: number; items: import('./types').FailureAgg[] }>(`/api/v1/campaigns/${id}/failures`),
+
+  getExperimentMetrics: (id: number) =>
+    request<import('./types').ExperimentMetrics>(`/api/v1/campaigns/${id}/experiment`),
 
   listRecords: (
     id: number,

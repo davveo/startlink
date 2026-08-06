@@ -48,6 +48,7 @@ func New(mode string, deps Deps) *gin.Engine {
 			protected.GET("/campaigns/:id/subtasks", deps.Campaign.ListSubTasks)
 			protected.GET("/campaigns/:id/funnel", deps.Campaign.Funnel)
 			protected.GET("/campaigns/:id/failures", deps.Campaign.Failures)
+			protected.GET("/campaigns/:id/experiment", deps.Campaign.Experiment)
 			protected.GET("/campaigns/:id/records", deps.Campaign.ListRecords)
 			protected.GET("/campaigns/:id/export", deps.Campaign.ExportSync)
 			protected.POST("/campaigns/:id/exports", deps.Campaign.ExportAsync)
@@ -67,6 +68,7 @@ func New(mode string, deps Deps) *gin.Engine {
 			// 模板中心
 			protected.POST("/templates", deps.Template.Create)
 			protected.GET("/templates", deps.Template.List)
+			protected.POST("/templates/preview", deps.Template.Preview)
 			protected.GET("/templates/code/:code", deps.Template.GetByCode)
 			protected.GET("/templates/:id", deps.Template.Get)
 			protected.PUT("/templates/:id", deps.Template.Update)
@@ -76,6 +78,8 @@ func New(mode string, deps Deps) *gin.Engine {
 			protected.POST("/templates/:id/reject", deps.Template.Reject)
 			protected.POST("/templates/:id/disable", deps.Template.Disable)
 			protected.POST("/templates/:id/enable", deps.Template.Enable)
+			protected.GET("/templates/:id/versions", deps.Template.ListVersions)
+			protected.POST("/templates/:id/rollback", deps.Template.Rollback)
 		}
 	}
 	return r

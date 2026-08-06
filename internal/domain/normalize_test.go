@@ -27,6 +27,37 @@ func TestNormalizeChannels(t *testing.T) {
 	if _, _, _, err := in.NormalizeChannels(); err == nil {
 		t.Fatal("expected required channel")
 	}
+
+	in = &CreateCampaignInput{
+		Channels:    []ChannelType{ChannelInbox},
+		ChannelMode: ChannelModeConditional,
+		ChannelRoutes: []ChannelRouteRule{
+			{When: &RouteCondition{Var: "vip", Op: "eq", Value: "1"}, Channels: []ChannelType{ChannelSMS}},
+			{Channels: []ChannelType{ChannelInbox}},
+		},
+	}
+	primary, list, mode, err = in.NormalizeChannels()
+	if err != nil || primary != ChannelInbox || len(list) != 1 || mode != ChannelModeConditional {
+		t.Fatalf("conditional keep mode: %v %v %v %v", primary, list, mode, err)
+	}
+
+	in = &CreateCampaignInput{
+		Channels:    []ChannelType{ChannelSMS, ChannelInbox},
+		ChannelMode: ChannelModeCostPriority,
+		ChannelCosts: map[ChannelType]int{ChannelSMS: 10, ChannelInbox: 1},
+	}
+	primary, list, mode, err = in.NormalizeChannels()
+	if err != nil || primary != ChannelSMS || len(list) != 2 || mode != ChannelModeCostPriority {
+		t.Fatalf("cost_priority keep mode: %v %v %v %v", primary, list, mode, err)
+	}
+
+	in = &CreateCampaignInput{
+		Channels:    []ChannelType{ChannelInbox},
+		ChannelMode: ChannelModeConditional,
+	}
+	if _, _, _, err := in.NormalizeChannels(); err == nil {
+		t.Fatal("expected channel_routes required")
+	}
 }
 
 func TestApplyDefaultChannel(t *testing.T) {

@@ -8,8 +8,11 @@ import { CampaignsPage } from './pages/CampaignsPage'
 import { HomePage } from './pages/HomePage'
 import { LoginPage } from './pages/LoginPage'
 import { OpsPage } from './pages/OpsPage'
+import { ProgressPage } from './pages/ProgressPage'
+import { RecordsPage } from './pages/RecordsPage'
 import { SubTasksPage } from './pages/SubTasksPage'
 import { TasksPage } from './pages/TasksPage'
+import { TemplateFormPage } from './pages/TemplateFormPage'
 import { TemplatesPage } from './pages/TemplatesPage'
 import './styles/global.css'
 
@@ -29,9 +32,13 @@ createRoot(document.getElementById('root')!).render(
             <Route index element={<HomePage />} />
             <Route path="tasks" element={<TasksPage />} />
             <Route path="tasks/:id/subtasks" element={<SubTasksPage />} />
+            <Route path="progress" element={<ProgressPage />} />
             <Route path="ops" element={<OpsPage />} />
+            <Route path="ops/:id/records" element={<RecordsPage />} />
             <Route path="ops/:id" element={<OpsPage />} />
             <Route path="templates" element={<TemplatesPage />} />
+            <Route path="templates/new" element={<TemplateFormPage />} />
+            <Route path="templates/:id/edit" element={<TemplateFormPage />} />
             <Route path="campaigns" element={<CampaignsPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>

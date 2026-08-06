@@ -187,3 +187,50 @@ func (h *TemplateHandler) Enable(c *gin.Context) {
 	}
 	response.OK(c, tpl)
 }
+
+func (h *TemplateHandler) Preview(c *gin.Context) {
+	var in domain.PreviewTemplateInput
+	if err := c.ShouldBindJSON(&in); err != nil {
+		response.Fail(c, errcode.InvalidParam)
+		return
+	}
+	res, err := h.svc.Preview(c.Request.Context(), in)
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+	response.OK(c, res)
+}
+
+func (h *TemplateHandler) ListVersions(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		response.Fail(c, errcode.InvalidParam)
+		return
+	}
+	list, err := h.svc.ListVersions(c.Request.Context(), id)
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+	response.OK(c, gin.H{"items": list})
+}
+
+func (h *TemplateHandler) Rollback(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		response.Fail(c, errcode.InvalidParam)
+		return
+	}
+	var in domain.RollbackTemplateInput
+	if err := c.ShouldBindJSON(&in); err != nil {
+		response.Fail(c, errcode.InvalidParam)
+		return
+	}
+	tpl, err := h.svc.Rollback(c.Request.Context(), id, in)
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+	response.OK(c, tpl)
+}

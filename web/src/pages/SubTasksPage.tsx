@@ -101,7 +101,7 @@ export function SubTasksPage() {
             <ButtonLink to="/tasks" variant="ghost">
               返回列表
             </ButtonLink>
-            <ButtonLink to={`/campaigns?task=${mainTaskId}`} variant="ink">
+            <ButtonLink to={`/progress?task=${mainTaskId}`} variant="ink">
               活动进度
             </ButtonLink>
           </>

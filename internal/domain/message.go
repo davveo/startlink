@@ -2,6 +2,7 @@ package domain
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -11,6 +12,8 @@ type TargetUser struct {
 	Channels []ChannelType     `json:"channels,omitempty"` // 用户可达渠道，空则用任务默认渠道
 	Vars     map[string]string `json:"vars,omitempty"`     // 个性化变量
 	Extra    map[string]any    `json:"extra,omitempty"`
+	Locale   string            `json:"locale,omitempty"`   // 如 zh-CN；空则用模板 default_locale
+	Timezone string            `json:"timezone,omitempty"` // IANA，如 Asia/Shanghai；空则服务器本地时区
 }
 
 // AudienceQuery 人群圈选请求（业务快速对接的标准入参）
@@ -32,21 +35,29 @@ type AudiencePage struct {
 
 // PushMessage MQ 中的单条推送消息
 type PushMessage struct {
-	MsgID       string            `json:"msg_id"`
-	MainTaskID  uint64            `json:"main_task_id"`
-	SubTaskID   uint64            `json:"sub_task_id"`
-	UserID      string            `json:"user_id"`
-	Channel     ChannelType       `json:"channel"`                // 主渠道（兼容；通常为 channels[0]）
-	Channels    []ChannelType     `json:"channels,omitempty"`     // 渠道链（降级顺序或并行列表）
-	ChannelMode ChannelMode       `json:"channel_mode,omitempty"` // single | fallback | parallel
-	TemplateID  string            `json:"template_id"`
-	Title       string            `json:"title,omitempty"`
-	Body        string            `json:"body"`
-	Vars        map[string]string `json:"vars,omitempty"`
-	Extra       map[string]any    `json:"extra,omitempty"` // 活动 payload 透传
-	BizScene    string            `json:"biz_scene"`
-	Priority    Priority          `json:"priority,omitempty"` // high | normal，决定投递 Stream
-	CreatedAt   time.Time         `json:"created_at"`
+	MsgID            string                    `json:"msg_id"`
+	MainTaskID       uint64                    `json:"main_task_id"`
+	SubTaskID        uint64                    `json:"sub_task_id"`
+	UserID           string                    `json:"user_id"`
+	Channel          ChannelType               `json:"channel"`                // 主渠道（兼容；通常为 channels[0]）
+	Channels         []ChannelType             `json:"channels,omitempty"`     // 渠道链（降级顺序或并行列表）
+	ChannelMode      ChannelMode               `json:"channel_mode,omitempty"` // single | fallback | parallel | all_success
+	TemplateID       string                    `json:"template_id"`
+	Title            string                    `json:"title,omitempty"`
+	Body             string                    `json:"body"`
+	Contents         map[string]ChannelContent `json:"contents,omitempty"` // 分渠道内容；缺省回退 Title/Body
+	Vars             map[string]string         `json:"vars,omitempty"`
+	Extra            map[string]any            `json:"extra,omitempty"` // 活动 payload 透传
+	BizScene         string                    `json:"biz_scene"`
+	Priority         Priority                  `json:"priority,omitempty"` // high | normal，决定投递 Stream
+	Locale           string                    `json:"locale,omitempty"`
+	Timezone         string                    `json:"timezone,omitempty"`
+	MissingVarPolicy MissingVarPolicy          `json:"missing_var_policy,omitempty"`
+	ExpireAt         *time.Time                `json:"expire_at,omitempty"`
+	MaxFallback      int                       `json:"max_fallback,omitempty"`
+	ChannelRoutes    []ChannelRouteRule        `json:"channel_routes,omitempty"`
+	ChannelCosts     map[ChannelType]int       `json:"channel_costs,omitempty"`
+	CreatedAt        time.Time                 `json:"created_at"`
 }
 
 // EffectiveChannels 解析实际要走的渠道列表
@@ -62,6 +73,9 @@ func (m PushMessage) EffectiveChannels() []ChannelType {
 
 func (m PushMessage) EffectiveMode() ChannelMode {
 	mode := m.ChannelMode.Normalize()
+	if mode == ChannelModeConditional || mode == ChannelModeCostPriority {
+		return mode
+	}
 	chs := m.EffectiveChannels()
 	if len(chs) <= 1 {
 		return ChannelModeSingle
@@ -70,6 +84,19 @@ func (m PushMessage) EffectiveMode() ChannelMode {
 		return ChannelModeFallback // 多渠道未显式指定时默认降级
 	}
 	return mode
+}
+
+// ResolveSendChannels 按策略解析最终发送渠道链
+func (m PushMessage) ResolveSendChannels() []ChannelType {
+	base := m.EffectiveChannels()
+	switch m.ChannelMode.Normalize() {
+	case ChannelModeConditional:
+		return MatchRouteRules(m.ChannelRoutes, m.Vars, m.Extra, base)
+	case ChannelModeCostPriority:
+		return SortChannelsByCost(base, m.ChannelCosts)
+	default:
+		return base
+	}
 }
 
 // SendRequest 渠道发送请求
@@ -117,7 +144,7 @@ type CreateCampaignInput struct {
 	Title         string         `json:"title" binding:"required"`
 	Channel       ChannelType    `json:"channel"`                        // 主渠道；与 channels 二选一或同时传（channels 优先）
 	Channels      []ChannelType  `json:"channels,omitempty"`             // 有序渠道链：fallback 按序降级，parallel 并行
-	ChannelMode   ChannelMode    `json:"channel_mode,omitempty"`         // single | fallback | parallel
+	ChannelMode   ChannelMode    `json:"channel_mode,omitempty"`         // single|fallback|parallel|all_success|conditional|cost_priority
 	TemplateID    string         `json:"template_id" binding:"required"` // 模板中心 code，须为已审核通过
 	TemplateBody  string         `json:"template_body,omitempty"`        // 已废弃：由模板中心快照填充，传入将被忽略
 	AudienceRef   string         `json:"audience_ref" binding:"required"`
@@ -125,6 +152,17 @@ type CreateCampaignInput struct {
 	Payload       map[string]any `json:"payload,omitempty"`
 	WebhookURL    string         `json:"webhook_url,omitempty"`
 	ScheduledAt   *time.Time     `json:"scheduled_at,omitempty"`
+	ExpireAt      *time.Time     `json:"expire_at,omitempty"`
+	// ExperimentID / Salt / ControlPercent：实验抽样；对照组不发送
+	ExperimentID             string `json:"experiment_id,omitempty"`
+	ExperimentSalt           string `json:"experiment_salt,omitempty"`
+	ExperimentControlPercent int    `json:"experiment_control_percent,omitempty"`
+	// MaxFallback fallback 最大降级次数（不含首渠）；0=不限制
+	MaxFallback int `json:"max_fallback,omitempty"`
+	// ChannelRoutes 条件路由（channel_mode=conditional）
+	ChannelRoutes []ChannelRouteRule `json:"channel_routes,omitempty"`
+	// ChannelCosts 渠道成本（channel_mode=cost_priority）
+	ChannelCosts map[ChannelType]int `json:"channel_costs,omitempty"`
 	// SendWindows 分时投放窗，如 [{"start":"09:00","end":"21:00"}]；空表示全天可发
 	SendWindows []SendWindow `json:"send_windows,omitempty"`
 	// PaceQPS 本活动投放速率上限（Worker 入队节流）；0 表示不限制
@@ -214,12 +252,53 @@ func (in *CreateCampaignInput) NormalizeChannels() (ChannelType, []ChannelType, 
 	if !mode.Valid() {
 		return "", nil, "", fmt.Errorf("invalid channel_mode: %s", in.ChannelMode)
 	}
+	// conditional / cost_priority 不因渠道数量被纠偏为 single/fallback
+	if mode == ChannelModeConditional || mode == ChannelModeCostPriority {
+		if err := in.validateStrategyFields(mode, chs); err != nil {
+			return "", nil, "", err
+		}
+		return chs[0], chs, mode, nil
+	}
 	if len(chs) == 1 {
 		mode = ChannelModeSingle
 	} else if mode == ChannelModeSingle {
 		mode = ChannelModeFallback
 	}
 	return chs[0], chs, mode, nil
+}
+
+// validateStrategyFields 校验条件路由 / 成本优先入参
+func (in *CreateCampaignInput) validateStrategyFields(mode ChannelMode, base []ChannelType) error {
+	switch mode {
+	case ChannelModeConditional:
+		if len(in.ChannelRoutes) == 0 {
+			return fmt.Errorf("channel_routes required when channel_mode=conditional")
+		}
+		for i, r := range in.ChannelRoutes {
+			if len(r.Channels) == 0 {
+				return fmt.Errorf("channel_routes[%d].channels required", i)
+			}
+			for _, c := range r.Channels {
+				if !c.Valid() {
+					return fmt.Errorf("channel_routes[%d]: invalid channel %s", i, c)
+				}
+			}
+			if r.When != nil && strings.TrimSpace(r.When.Var) == "" {
+				return fmt.Errorf("channel_routes[%d].when.var required", i)
+			}
+		}
+	case ChannelModeCostPriority:
+		for ch, cost := range in.ChannelCosts {
+			if !ch.Valid() {
+				return fmt.Errorf("channel_costs: invalid channel %s", ch)
+			}
+			if cost < 0 {
+				return fmt.Errorf("channel_costs[%s]: cost must be >= 0", ch)
+			}
+		}
+		_ = base // 成本表可选，缺省用 DefaultChannelCosts
+	}
+	return nil
 }
 
 // SubTaskStatusSummary 子任务按状态汇总
@@ -270,13 +349,15 @@ type AudienceEstimateInput struct {
 
 // DryRunInput 测试渲染 / dry-run
 type DryRunInput struct {
-	TemplateID  string            `json:"template_id" binding:"required"`
-	Title       string            `json:"title,omitempty"`
-	Vars        map[string]string `json:"vars,omitempty"`
-	Channel     ChannelType       `json:"channel,omitempty"`
-	Channels    []ChannelType     `json:"channels,omitempty"`
-	ChannelMode ChannelMode       `json:"channel_mode,omitempty"`
-	UserID      string            `json:"user_id,omitempty"`
+	TemplateID       string            `json:"template_id" binding:"required"`
+	Title            string            `json:"title,omitempty"`
+	Vars             map[string]string `json:"vars,omitempty"`
+	Channel          ChannelType       `json:"channel,omitempty"`
+	Channels         []ChannelType     `json:"channels,omitempty"`
+	ChannelMode      ChannelMode       `json:"channel_mode,omitempty"`
+	UserID           string            `json:"user_id,omitempty"`
+	Locale           string            `json:"locale,omitempty"`
+	MissingVarPolicy MissingVarPolicy  `json:"missing_var_policy,omitempty"` // 覆盖模板策略；空则用模板
 	// Send=true 时真实调用渠道（写入 is_test 流水，不计入活动统计）；默认仅渲染校验
 	Send bool `json:"send,omitempty"`
 }

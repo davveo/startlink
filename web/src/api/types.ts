@@ -34,17 +34,58 @@ export type TaskStatus =
 
 export type Priority = 'high' | 'normal' | ''
 
-export type ChannelMode = 'single' | 'fallback' | 'parallel' | ''
+export type ChannelMode =
+  | 'single'
+  | 'fallback'
+  | 'parallel'
+  | 'all_success'
+  | 'conditional'
+  | 'cost_priority'
+  | ''
+
+export type RouteCondition = {
+  var: string
+  op?: string
+  value?: string
+}
+
+export type ChannelRouteRule = {
+  when?: RouteCondition
+  channels: ChannelType[]
+}
+
+export type MissingVarPolicy = 'error' | 'keep' | 'default' | 'empty' | ''
+
+export type ChannelContent = {
+  title?: string
+  body?: string
+  extra?: Record<string, unknown>
+}
+
+export type VarDef = {
+  name: string
+  type?: string
+  required?: boolean
+  default?: string
+  example?: string
+  sensitive?: boolean
+}
 
 export type Template = {
   id: number
   code: string
   name: string
   body: string
+  contents?: Record<string, ChannelContent>
+  var_schema?: VarDef[]
+  missing_var_policy?: MissingVarPolicy
+  default_locale?: string
+  locales?: Record<string, { body?: string; contents?: Record<string, ChannelContent> }>
   biz_scene: string
   channel_hint?: ChannelType
   status: TemplateStatus
   version: number
+  revision?: number
   reject_reason?: string
   created_by?: string
   updated_by?: string
@@ -113,6 +154,13 @@ export type CreateCampaignInput = {
   payload?: Record<string, unknown>
   webhook_url?: string
   scheduled_at?: string
+  expire_at?: string
+  experiment_id?: string
+  experiment_salt?: string
+  experiment_control_percent?: number
+  max_fallback?: number
+  channel_routes?: ChannelRouteRule[]
+  channel_costs?: Partial<Record<ChannelType, number>>
   pace_qps?: number
   created_by?: string
   as_draft?: boolean
@@ -223,11 +271,25 @@ export type DryRunResult = {
   rendered_title?: string
   rendered_content: string
   missing_vars?: string[]
+  schema_errors?: string[]
   channels?: ChannelType[]
   channel_mode?: ChannelMode
+  missing_var_policy?: MissingVarPolicy
+  by_channel?: Record<string, { title?: string; content: string }>
   sent: boolean
   send_results?: { success: boolean; error_msg?: string; provider_id?: string }[]
   test_record_ids?: number[]
+}
+
+export type TemplatePreviewResult = {
+  rendered_title?: string
+  rendered_content: string
+  missing_vars?: string[]
+  schema_errors?: string[]
+  channel?: ChannelType
+  locale?: string
+  missing_var_policy?: MissingVarPolicy
+  by_channel?: Record<string, { title?: string; content: string }>
 }
 
 export type FunnelView = {
@@ -264,6 +326,25 @@ export type FailureAgg = {
   provider: string
   error_msg: string
   count: number
+}
+
+export type ExperimentGroupMetrics = {
+  group: string
+  assigned_users: number
+  reach_users: number
+  success_users: number
+  fail_users: number
+  suppressed_users: number
+  sent_records: number
+  delivered_records: number
+  clicked_records: number
+  failed_records: number
+  success_rate: number
+}
+
+export type ExperimentMetrics = {
+  experiment_id?: string
+  groups: ExperimentGroupMetrics[]
 }
 
 export type PushRecord = {

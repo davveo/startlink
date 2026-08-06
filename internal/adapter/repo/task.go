@@ -111,7 +111,9 @@ INNER JOIN (
 		&domain.PushRecord{},
 		&domain.PushReceipt{},
 		&domain.Template{},
+		&domain.TemplateVersion{},
 		&domain.ExportJob{},
+		&domain.ExperimentAssignment{},
 	)
 }
 
@@ -1088,6 +1090,11 @@ func (r *PushRepo) CreateTestRecord(ctx context.Context, rec *domain.PushRecord)
 }
 
 func (r *PushRepo) CreateExportJob(ctx context.Context, job *domain.ExportJob) error {
+	// MySQL JSON 列不能写入空字符串，空则落合法 JSON 对象
+	if job.FilterJSON == nil || strings.TrimSpace(*job.FilterJSON) == "" {
+		v := "{}"
+		job.FilterJSON = &v
+	}
 	return r.db.WithContext(ctx).Create(job).Error
 }
 
@@ -1124,4 +1131,150 @@ func (r *PushRepo) IterPushRecords(ctx context.Context, mainTaskID uint64, fn fu
 			}
 		}
 	}
+}
+
+func (r *PushRepo) CreateExperimentAssignments(ctx context.Context, rows []domain.ExperimentAssignment) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	return r.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "main_task_id"}, {Name: "user_id"}},
+		DoNothing: true,
+	}).CreateInBatches(rows, 200).Error
+}
+
+func (r *PushRepo) AggregateExperiment(ctx context.Context, mainTaskID uint64) (port.ExperimentMetrics, error) {
+	out := port.ExperimentMetrics{Groups: []port.ExperimentGroupMetrics{}}
+	var main domain.MainTask
+	if err := r.db.WithContext(ctx).Select("id, experiment_id").First(&main, mainTaskID).Error; err != nil {
+		return out, err
+	}
+	out.ExperimentID = main.ExperimentID
+
+	type assignRow struct {
+		GroupName string
+		Cnt       int64
+	}
+	var assigns []assignRow
+	if err := r.db.WithContext(ctx).Model(&domain.ExperimentAssignment{}).
+		Select("group_name, COUNT(*) AS cnt").
+		Where("main_task_id = ?", mainTaskID).
+		Group("group_name").
+		Scan(&assigns).Error; err != nil {
+		return out, err
+	}
+	assignMap := map[string]int64{}
+	for _, a := range assigns {
+		assignMap[a.GroupName] = a.Cnt
+	}
+
+	// 按 experiment_group + 用户结果聚合流水
+	type userAgg struct {
+		GroupName string
+		UserID    string
+		HasOK     int64
+		HasFail   int64
+		HasSupp   int64
+	}
+	var users []userAgg
+	err := r.db.WithContext(ctx).Raw(`
+SELECT experiment_group AS group_name, user_id,
+  MAX(CASE WHEN status IN ('sent','delivered','clicked') THEN 1 ELSE 0 END) AS has_ok,
+  MAX(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS has_fail,
+  MAX(CASE WHEN status IN ('suppressed','unreachable','expired','quota_rejected','cancelled') THEN 1 ELSE 0 END) AS has_supp
+FROM push_records
+WHERE main_task_id = ? AND is_test = 0 AND experiment_group <> ''
+GROUP BY experiment_group, user_id
+`, mainTaskID).Scan(&users).Error
+	if err != nil {
+		return out, err
+	}
+
+	type recAgg struct {
+		GroupName string
+		Status    string
+		Cnt       int64
+	}
+	var recs []recAgg
+	_ = r.db.WithContext(ctx).Raw(`
+SELECT experiment_group AS group_name, status, COUNT(*) AS cnt
+FROM push_records
+WHERE main_task_id = ? AND is_test = 0 AND experiment_group <> ''
+GROUP BY experiment_group, status
+`, mainTaskID).Scan(&recs).Error
+
+	groupSet := map[string]struct{}{}
+	for g := range assignMap {
+		groupSet[g] = struct{}{}
+	}
+	for _, u := range users {
+		groupSet[u.GroupName] = struct{}{}
+	}
+	for _, r0 := range recs {
+		groupSet[r0.GroupName] = struct{}{}
+	}
+
+	for g := range groupSet {
+		m := port.ExperimentGroupMetrics{Group: g, AssignedUsers: assignMap[g]}
+		var reach, okU, failU, suppU int64
+		for _, u := range users {
+			if u.GroupName != g {
+				continue
+			}
+			reach++
+			if u.HasOK > 0 {
+				okU++
+			} else if u.HasFail > 0 {
+				failU++
+			} else if u.HasSupp > 0 {
+				suppU++
+			}
+		}
+		m.ReachUsers = reach
+		m.SuccessUsers = okU
+		m.FailUsers = failU
+		m.SuppressedUsers = suppU
+		for _, r0 := range recs {
+			if r0.GroupName != g {
+				continue
+			}
+			switch domain.PushStatus(r0.Status) {
+			case domain.PushStatusSent:
+				m.SentRecords += r0.Cnt
+			case domain.PushStatusDelivered:
+				m.DeliveredRecords += r0.Cnt
+			case domain.PushStatusClicked:
+				m.ClickedRecords += r0.Cnt
+			case domain.PushStatusFailed:
+				m.FailedRecords += r0.Cnt
+			}
+		}
+		den := m.AssignedUsers
+		if den <= 0 {
+			den = m.ReachUsers
+		}
+		if den > 0 {
+			m.SuccessRate = float64(m.SuccessUsers) / float64(den)
+		}
+		out.Groups = append(out.Groups, m)
+	}
+	// stable order: control then treatment then others
+	order := []string{"control", "treatment"}
+	sorted := make([]port.ExperimentGroupMetrics, 0, len(out.Groups))
+	seen := map[string]bool{}
+	for _, name := range order {
+		for _, g := range out.Groups {
+			if g.Group == name {
+				sorted = append(sorted, g)
+				seen[name] = true
+			}
+		}
+	}
+	for _, g := range out.Groups {
+		if !seen[g.Group] {
+			sorted = append(sorted, g)
+		}
+	}
+	out.Groups = sorted
+	return out, nil
 }

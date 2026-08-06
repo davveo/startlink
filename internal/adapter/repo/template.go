@@ -23,7 +23,12 @@ func (r *TemplateRepo) Create(ctx context.Context, tpl *domain.Template) error {
 		// 占位唯一 code，避免并发空串撞唯一索引；创建后再规范为 tpl_{id}
 		tpl.Code = "tmp_" + uuid.NewString()
 	}
-	return r.db.WithContext(ctx).Create(tpl).Error
+	tpl.SyncJSONColumns()
+	if err := r.db.WithContext(ctx).Create(tpl).Error; err != nil {
+		return err
+	}
+	tpl.HydrateJSON()
+	return nil
 }
 
 func (r *TemplateRepo) Update(ctx context.Context, tpl *domain.Template) error {
@@ -38,18 +43,25 @@ func (r *TemplateRepo) Update(ctx context.Context, tpl *domain.Template) error {
 }
 
 func (r *TemplateRepo) UpdateCAS(ctx context.Context, tpl *domain.Template, expectedVersion int64) (bool, error) {
+	tpl.SyncJSONColumns()
 	updates := map[string]any{
-		"code":          tpl.Code,
-		"name":          tpl.Name,
-		"body":          tpl.Body,
-		"biz_scene":     tpl.BizScene,
-		"channel_hint":  tpl.ChannelHint,
-		"status":        tpl.Status,
-		"reject_reason": tpl.RejectReason,
-		"updated_by":    tpl.UpdatedBy,
-		"reviewed_by":   tpl.ReviewedBy,
-		"reviewed_at":   tpl.ReviewedAt,
-		"version":       expectedVersion + 1,
+		"code":               tpl.Code,
+		"name":               tpl.Name,
+		"body":               tpl.Body,
+		"contents":           tpl.ContentsJSON,
+		"var_schema":         tpl.VarSchemaJSON,
+		"missing_var_policy": tpl.MissingVarPolicy,
+		"default_locale":     tpl.DefaultLocale,
+		"locales":            tpl.LocalesJSON,
+		"biz_scene":          tpl.BizScene,
+		"channel_hint":       tpl.ChannelHint,
+		"status":             tpl.Status,
+		"revision":           tpl.Revision,
+		"reject_reason":      tpl.RejectReason,
+		"updated_by":         tpl.UpdatedBy,
+		"reviewed_by":        tpl.ReviewedBy,
+		"reviewed_at":        tpl.ReviewedAt,
+		"version":            expectedVersion + 1,
 	}
 	res := r.db.WithContext(ctx).Model(&domain.Template{}).
 		Where("id = ? AND version = ?", tpl.ID, expectedVersion).
@@ -59,6 +71,7 @@ func (r *TemplateRepo) UpdateCAS(ctx context.Context, tpl *domain.Template, expe
 	}
 	if res.RowsAffected > 0 {
 		tpl.Version = expectedVersion + 1
+		tpl.HydrateJSON()
 		return true, nil
 	}
 	return false, nil
@@ -69,6 +82,7 @@ func (r *TemplateRepo) GetByID(ctx context.Context, id uint64) (*domain.Template
 	if err := r.db.WithContext(ctx).First(&t, id).Error; err != nil {
 		return nil, err
 	}
+	t.HydrateJSON()
 	return &t, nil
 }
 
@@ -77,6 +91,7 @@ func (r *TemplateRepo) GetByCode(ctx context.Context, code string) (*domain.Temp
 	if err := r.db.WithContext(ctx).Where("code = ?", code).First(&t).Error; err != nil {
 		return nil, err
 	}
+	t.HydrateJSON()
 	return &t, nil
 }
 
@@ -116,7 +131,48 @@ func (r *TemplateRepo) List(ctx context.Context, q domain.ListTemplateQuery) ([]
 
 	var list []domain.Template
 	err := tx.Order("id DESC").Offset((page - 1) * size).Limit(size).Find(&list).Error
+	for i := range list {
+		list[i].HydrateJSON()
+	}
 	return list, total, err
+}
+
+func (r *TemplateRepo) CreateVersion(ctx context.Context, ver *domain.TemplateVersion) error {
+	if ver.ContentsJSON == nil {
+		ver.ContentsJSON = domain.MarshalJSONColumn(ver.Contents, false)
+	}
+	if ver.VarSchemaJSON == nil {
+		ver.VarSchemaJSON = domain.MarshalJSONColumn(ver.VarSchema, true)
+	}
+	if ver.LocalesJSON == nil {
+		ver.LocalesJSON = domain.MarshalJSONColumn(ver.Locales, false)
+	}
+	return r.db.WithContext(ctx).Create(ver).Error
+}
+
+func (r *TemplateRepo) ListVersions(ctx context.Context, templateID uint64, limit int) ([]domain.TemplateVersion, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	var list []domain.TemplateVersion
+	err := r.db.WithContext(ctx).Where("template_id = ?", templateID).
+		Order("revision DESC").Limit(limit).Find(&list).Error
+	for i := range list {
+		list[i].HydrateJSON()
+	}
+	return list, err
+}
+
+func (r *TemplateRepo) GetVersion(ctx context.Context, templateID uint64, revision int64) (*domain.TemplateVersion, error) {
+	var v domain.TemplateVersion
+	if err := r.db.WithContext(ctx).Where("template_id = ? AND revision = ?", templateID, revision).First(&v).Error; err != nil {
+		return nil, err
+	}
+	v.HydrateJSON()
+	return &v, nil
 }
 
 // EnsureTemplateCode 创建后若仍是临时 code 则回填 tpl_{id}

@@ -152,6 +152,20 @@ func (h *CampaignHandler) Failures(c *gin.Context) {
 	response.OK(c, res)
 }
 
+func (h *CampaignHandler) Experiment(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		response.Fail(c, errcode.InvalidParam)
+		return
+	}
+	res, err := h.svc.ExperimentMetrics(c.Request.Context(), id)
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+	response.OK(c, res)
+}
+
 func (h *CampaignHandler) ListRecords(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {

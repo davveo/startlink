@@ -281,7 +281,7 @@ export function TasksPage() {
                     <ButtonLink to={`/ops/${t.id}`} variant="ghost">
                       分析
                     </ButtonLink>
-                    <ButtonLink to={`/campaigns?task=${t.id}`} variant="ghost">
+                    <ButtonLink to={`/progress?task=${t.id}`} variant="ghost">
                       进度
                     </ButtonLink>
                     <Button variant="ghost" type="button" disabled={busy} onClick={() => void copyOne(t.id)}>

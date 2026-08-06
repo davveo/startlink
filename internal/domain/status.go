@@ -156,14 +156,18 @@ func (c ChannelType) Valid() bool {
 type ChannelMode string
 
 const (
-	ChannelModeSingle   ChannelMode = "single"   // 单渠道（默认）
-	ChannelModeFallback ChannelMode = "fallback" // 按配置顺序依次降级，成功即停
-	ChannelModeParallel ChannelMode = "parallel" // 同内容多渠道并行，任一成功即算成功
+	ChannelModeSingle       ChannelMode = "single"        // 单渠道（默认）
+	ChannelModeFallback     ChannelMode = "fallback"      // 按配置顺序依次降级，成功即停
+	ChannelModeParallel     ChannelMode = "parallel"      // 同内容多渠道并行，任一成功即算成功
+	ChannelModeAllSuccess   ChannelMode = "all_success"   // 并行且全部渠道成功才算成功
+	ChannelModeConditional  ChannelMode = "conditional"   // 按用户变量条件路由渠道
+	ChannelModeCostPriority ChannelMode = "cost_priority" // 按渠道成本从低到高降级
 )
 
 func (m ChannelMode) Valid() bool {
 	switch m {
-	case "", ChannelModeSingle, ChannelModeFallback, ChannelModeParallel:
+	case "", ChannelModeSingle, ChannelModeFallback, ChannelModeParallel, ChannelModeAllSuccess,
+		ChannelModeConditional, ChannelModeCostPriority:
 		return true
 	default:
 		return false

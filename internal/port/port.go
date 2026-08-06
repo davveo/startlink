@@ -176,6 +176,29 @@ type PushRepository interface {
 	GetExportJob(ctx context.Context, id uint64) (*domain.ExportJob, error)
 	UpdateExportJob(ctx context.Context, id uint64, fields map[string]any) error
 	IterPushRecords(ctx context.Context, mainTaskID uint64, fn func(domain.PushRecord) error) error
+	CreateExperimentAssignments(ctx context.Context, rows []domain.ExperimentAssignment) error
+	AggregateExperiment(ctx context.Context, mainTaskID uint64) (ExperimentMetrics, error)
+}
+
+// ExperimentMetrics 实验看板指标
+type ExperimentMetrics struct {
+	ExperimentID string                   `json:"experiment_id,omitempty"`
+	Groups       []ExperimentGroupMetrics `json:"groups"`
+}
+
+// ExperimentGroupMetrics 分组指标
+type ExperimentGroupMetrics struct {
+	Group          string  `json:"group"` // control|treatment
+	AssignedUsers  int64   `json:"assigned_users"`
+	ReachUsers     int64   `json:"reach_users"` // 有流水的去重用户
+	SuccessUsers   int64   `json:"success_users"`
+	FailUsers      int64   `json:"fail_users"`
+	SuppressedUsers int64  `json:"suppressed_users"`
+	SentRecords    int64   `json:"sent_records"`
+	DeliveredRecords int64 `json:"delivered_records"`
+	ClickedRecords int64   `json:"clicked_records"`
+	FailedRecords  int64   `json:"failed_records"`
+	SuccessRate    float64 `json:"success_rate"` // success_users / max(assigned,1) for treatment; 0 for control send rate N/A
 }
 
 // UnsubscribeChecker 发送前按 user+channel 终检退订
@@ -212,6 +235,10 @@ type TemplateRepository interface {
 	GetByCode(ctx context.Context, code string) (*domain.Template, error)
 	Delete(ctx context.Context, id uint64) error
 	List(ctx context.Context, q domain.ListTemplateQuery) ([]domain.Template, int64, error)
+	// CreateVersion 写入内容版本快照
+	CreateVersion(ctx context.Context, ver *domain.TemplateVersion) error
+	ListVersions(ctx context.Context, templateID uint64, limit int) ([]domain.TemplateVersion, error)
+	GetVersion(ctx context.Context, templateID uint64, revision int64) (*domain.TemplateVersion, error)
 }
 
 // Notifier 终态通知（Webhook）

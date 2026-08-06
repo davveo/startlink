@@ -498,12 +498,15 @@ curl -c /tmp/starlink.cookie -X POST http://localhost:8080/api/v1/auth/login \
 | `biz_scene` | 是 | 业务场景，用于人群 Provider 路由与优先级映射 |
 | `title` | 是 | 活动标题；当前未传给渠道 Sender |
 | `channel` / `channels` | 是 | **本活动**渠道；`channels` 优先。策略非全局 |
-| `channel_mode` | 否 | **本活动**模式：`single` / `fallback` / `parallel`（见「多渠道与优先级」） |
+| `channel_mode` | 否 | **本活动**模式：`single` / `fallback` / `parallel` / `all_success`（见「多渠道与优先级」） |
 | `template_id` | 是 | 已审核模板的 `code`，不是数字主键 |
 | `audience_ref` | 是 | 人群引用 |
 | `audience_extra` | 否 | 传给人群 Provider 的扩展参数 |
 | `priority` | 否 | **本活动**队列：`high` / `normal`；不传则按 `biz_scene` + `mq.high_biz_scenes` 映射 |
 | `scheduled_at` | 否 | RFC3339 时间；Scheduler 按运行主机时间比较 |
+| `expire_at` | 否 | 活动过期；超时消息标记 `expired`，不调渠道并 ACK |
+| `experiment_id` / `experiment_salt` / `experiment_control_percent` | 否 | 实验抽样；对照组用户跳过；分组写入用户 Extra |
+| `max_fallback` | 否 | fallback 最大降级次数（不含首渠）；0=不限制 |
 | `webhook_url` | 否 | 覆盖默认终态回调 URL |
 | `payload` | 否 | 透传到渠道 `SendRequest.Extra` |
 | `pace_qps` | 否 | 本活动入队节奏；渠道高压时 Scheduler 还会再降速 |
@@ -531,17 +534,22 @@ curl -c /tmp/starlink.cookie -X POST http://localhost:8080/api/v1/auth/login \
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| `POST` | `/api/v1/templates` | 创建草稿；`code` 可省略，自动生成 `tpl_<id>` |
+| `POST` | `/api/v1/templates` | 创建草稿；`code` 可省略，自动生成 `tpl_<id>`；`body` 与 `contents` 至少其一 |
 | `GET` | `/api/v1/templates` | 列表；支持 `biz_scene/status/keyword/page/page_size`，`page_size` 上限 100 |
+| `POST` | `/api/v1/templates/preview` | 按策略渲染预览（可传 template_id 或内联 body/contents） |
 | `GET` | `/api/v1/templates/:id` | 按数字 ID 查询 |
 | `GET` | `/api/v1/templates/code/:code` | 按 code 查询 |
-| `PUT` | `/api/v1/templates/:id` | 更新草稿或被驳回模板 |
+| `PUT` | `/api/v1/templates/:id` | 更新草稿或被驳回模板（落 `template_versions`） |
 | `DELETE` | `/api/v1/templates/:id` | 删除草稿或被驳回模板（硬删除） |
 | `POST` | `/api/v1/templates/:id/submit` | `draft/rejected` → `pending_review` |
-| `POST` | `/api/v1/templates/:id/approve` | `pending_review` → `approved` |
+| `POST` | `/api/v1/templates/:id/approve` | `pending_review` → `approved`（落版本快照） |
 | `POST` | `/api/v1/templates/:id/reject` | `pending_review` → `rejected`，须传 `reject_reason` |
 | `POST` | `/api/v1/templates/:id/disable` | `approved` → `disabled` |
 | `POST` | `/api/v1/templates/:id/enable` | `disabled` → `pending_review`，须重新审核 |
+| `GET` | `/api/v1/templates/:id/versions` | 内容版本历史（`revision`，与乐观锁 `version` 独立） |
+| `POST` | `/api/v1/templates/:id/rollback` | 回滚到指定 `revision`，结果为 `draft` |
+
+模板扩展字段：`contents`（分渠道 title/body/extra）、`var_schema`、`missing_var_policy`（`error|keep|default|empty`）、`default_locale`、`locales`。
 
 模板状态机：
 
@@ -553,7 +561,7 @@ draft ──submit──► pending_review ──approve──► approved ─�
                                     pending_review ◄──────enable──────┘
 ```
 
-模板变量格式是 `{{name}}`，变量名只支持字母、数字和下划线，允许内部空格如 `{{ name }}`。当前渲染行为有一个不一致点：变量 map 为空时保留全部占位符；map 非空时，缺失变量会被替换为空字符串。
+模板变量格式是 `{{name}}`，变量名只支持字母、数字和下划线，允许内部空格如 `{{ name }}`。缺失变量行为由 `missing_var_policy` 控制；兼容默认 `empty`（有 vars map 时缺失→空串；无 vars 时保留占位符）。
 
 ### 渠道回执
 

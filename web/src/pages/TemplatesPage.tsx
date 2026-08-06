@@ -1,33 +1,24 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { ApiError, api } from '../api/client'
-import type { ChannelType, Template, TemplateStatus } from '../api/types'
+import type { Template, TemplateStatus } from '../api/types'
 import { useAuth } from '../auth/AuthContext'
 import { StatusChip } from '../components/StatusChip'
 import {
   BtnRow,
   Button,
+  ButtonLink,
   Empty,
   Field,
   Input,
   Mono,
   PageHead,
   Panel,
-  PanelTitle,
   Select,
   TableWrap,
   Td,
-  Textarea,
   Th,
   Toast,
 } from '../components/ui'
-
-const emptyForm = {
-  code: '',
-  name: '',
-  body: '你好 {{name}}，欢迎使用 Starlink。',
-  biz_scene: 'demo',
-  channel_hint: '' as ChannelType | '',
-}
 
 export function TemplatesPage() {
   const { user } = useAuth()
@@ -36,8 +27,6 @@ export function TemplatesPage() {
   const [total, setTotal] = useState(0)
   const [status, setStatus] = useState<TemplateStatus | ''>('')
   const [keyword, setKeyword] = useState('')
-  const [form, setForm] = useState(emptyForm)
-  const [editing, setEditing] = useState<Template | null>(null)
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
@@ -76,50 +65,6 @@ export function TemplatesPage() {
     }
   }
 
-  async function onSubmitForm(e: FormEvent) {
-    e.preventDefault()
-    if (editing) {
-      await run(
-        () =>
-          api.updateTemplate(editing.id, {
-            name: form.name,
-            body: form.body,
-            biz_scene: form.biz_scene,
-            channel_hint: form.channel_hint || undefined,
-            version: editing.version,
-          }),
-        '模板已更新',
-      )
-      setEditing(null)
-      setForm(emptyForm)
-      return
-    }
-    await run(
-      () =>
-        api.createTemplate({
-          code: form.code || undefined,
-          name: form.name,
-          body: form.body,
-          biz_scene: form.biz_scene,
-          channel_hint: form.channel_hint || undefined,
-          created_by: operator,
-        }),
-      '模板已创建',
-    )
-    setForm(emptyForm)
-  }
-
-  function startEdit(t: Template) {
-    setEditing(t)
-    setForm({
-      code: t.code,
-      name: t.name,
-      body: t.body,
-      biz_scene: t.biz_scene,
-      channel_hint: t.channel_hint ?? '',
-    })
-  }
-
   return (
     <div>
       <PageHead title="模板中心" description={`草稿 → 提交审核 → 通过后可被活动引用。共 ${total} 条。`} />
@@ -127,97 +72,33 @@ export function TemplatesPage() {
       {err ? <Toast kind="error">{err}</Toast> : null}
       {msg ? <Toast kind="ok">{msg}</Toast> : null}
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <Panel>
-          <form onSubmit={onSubmitForm}>
-            <PanelTitle>{editing ? `编辑 ${editing.code}` : '新建模板'}</PanelTitle>
-            {!editing ? (
-              <Field label="code（可选，空则自动生成）">
-                <Input
-                  value={form.code}
-                  onChange={(e) => setForm({ ...form, code: e.target.value })}
-                  placeholder="tpl_welcome"
-                />
-              </Field>
-            ) : null}
-            <Field label="名称">
-              <Input
-                required
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
-              />
-            </Field>
-            <Field label="业务场景">
-              <Input
-                value={form.biz_scene}
-                onChange={(e) => setForm({ ...form, biz_scene: e.target.value })}
-                placeholder="demo / marketing / txn"
-              />
-            </Field>
-            <Field label="建议渠道">
-              <Select
-                value={form.channel_hint}
-                onChange={(e) => setForm({ ...form, channel_hint: e.target.value as ChannelType | '' })}
-              >
-                <option value="">不限</option>
-                <option value="inbox">inbox</option>
-                <option value="sms">sms</option>
-                <option value="app_push">app_push</option>
-                <option value="email">email</option>
-                <option value="wecom">wecom</option>
-                <option value="dingtalk">dingtalk</option>
+      <Panel>
+        <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+          <div className="grid flex-1 gap-3 sm:grid-cols-2 md:grid-cols-3">
+            <Field label="状态">
+              <Select value={status} onChange={(e) => setStatus(e.target.value as TemplateStatus | '')}>
+                <option value="">全部</option>
+                <option value="draft">draft</option>
+                <option value="pending_review">pending_review</option>
+                <option value="approved">approved</option>
+                <option value="rejected">rejected</option>
+                <option value="disabled">disabled</option>
               </Select>
             </Field>
-            <Field label={<>正文（支持 {'{{var}}'}）</>}>
-              <Textarea
-                required
-                value={form.body}
-                onChange={(e) => setForm({ ...form, body: e.target.value })}
-              />
+            <Field label="关键词">
+              <Input value={keyword} onChange={(e) => setKeyword(e.target.value)} placeholder="名称 / code" />
             </Field>
-            <BtnRow>
-              <Button variant="primary" type="submit" disabled={busy}>
-                {editing ? '保存修改' : '创建草稿'}
-              </Button>
-              {editing ? (
-                <Button
-                  variant="ghost"
-                  type="button"
-                  onClick={() => {
-                    setEditing(null)
-                    setForm(emptyForm)
-                  }}
-                >
-                  取消编辑
-                </Button>
-              ) : null}
-            </BtnRow>
-          </form>
-        </Panel>
+          </div>
+          <BtnRow>
+            <Button variant="ink" type="button" onClick={() => void load()} disabled={busy}>
+              刷新
+            </Button>
+            <ButtonLink to="/templates/new" variant="primary">
+              创建模板
+            </ButtonLink>
+          </BtnRow>
+        </div>
 
-        <Panel>
-          <PanelTitle>筛选</PanelTitle>
-          <Field label="状态">
-            <Select value={status} onChange={(e) => setStatus(e.target.value as TemplateStatus | '')}>
-              <option value="">全部</option>
-              <option value="draft">draft</option>
-              <option value="pending_review">pending_review</option>
-              <option value="approved">approved</option>
-              <option value="rejected">rejected</option>
-              <option value="disabled">disabled</option>
-            </Select>
-          </Field>
-          <Field label="关键词">
-            <Input value={keyword} onChange={(e) => setKeyword(e.target.value)} placeholder="名称 / code" />
-          </Field>
-          <Button variant="ink" type="button" onClick={() => void load()} disabled={busy}>
-            刷新列表
-          </Button>
-        </Panel>
-      </div>
-
-      <Panel className="mt-4">
-        <PanelTitle>模板列表</PanelTitle>
         <TableWrap>
           <thead>
             <tr>
@@ -251,9 +132,9 @@ export function TemplatesPage() {
                   <BtnRow>
                     {t.status === 'draft' || t.status === 'rejected' ? (
                       <>
-                        <Button variant="ghost" type="button" disabled={busy} onClick={() => startEdit(t)}>
+                        <ButtonLink to={`/templates/${t.id}/edit`} variant="ghost">
                           编辑
-                        </Button>
+                        </ButtonLink>
                         <Button
                           variant="primary"
                           type="button"

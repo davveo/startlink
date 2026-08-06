@@ -3,10 +3,18 @@ import { useAuth } from '../auth/AuthContext'
 import { cn } from '../lib/cn'
 import { Button } from './ui'
 
+const navItems = [
+  { to: '/', end: true, label: '概览' },
+  { to: '/tasks', label: '任务' },
+  { to: '/templates', label: '模板' },
+] as const
+
 const navClass = ({ isActive }: { isActive: boolean }) =>
   cn(
-    'rounded-full px-3.5 py-2 text-sm transition',
-    isActive ? 'bg-teal/18 text-white' : 'text-white/70 hover:bg-teal/18 hover:text-white',
+    'block rounded-lg px-3 py-2.5 text-sm font-medium transition',
+    isActive
+      ? 'bg-teal/20 text-white shadow-[inset_3px_0_0_0_var(--color-teal)]'
+      : 'text-white/65 hover:bg-white/10 hover:text-white',
   )
 
 export function Layout() {
@@ -19,49 +27,44 @@ export function Layout() {
   }
 
   return (
-    <div className="grid min-h-screen grid-rows-[auto_1fr_auto]">
-      <header className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-6 bg-ink px-6 py-4 text-[#f7f8fa]">
-        <div className="flex items-baseline gap-2.5">
-          <div className="font-display text-[1.35rem] font-extrabold tracking-wide">
+    <div className="flex min-h-screen">
+      <aside className="sticky top-0 flex h-screen w-[220px] shrink-0 flex-col bg-ink text-[#f7f8fa]">
+        <div className="border-b border-white/10 px-5 py-5">
+          <div className="font-display text-[1.25rem] font-extrabold tracking-wide">
             STAR<span className="text-teal">LINK</span>
           </div>
-          <div className="text-sm text-white/55">推送运营台</div>
+          <div className="mt-1 text-xs text-white/50">推送运营台</div>
         </div>
-        <nav className="flex flex-wrap items-center gap-1">
-          <NavLink to="/" end className={navClass}>
-            概览
-          </NavLink>
-          <NavLink to="/tasks" className={navClass}>
-            任务
-          </NavLink>
-          <NavLink to="/ops" className={navClass}>
-            分析
-          </NavLink>
-          <NavLink to="/templates" className={navClass}>
-            模板
-          </NavLink>
-          <NavLink to="/campaigns" className={navClass}>
-            活动
-          </NavLink>
-          <div className="ml-2 flex items-center gap-2 border-l border-white/15 pl-3">
-            <span className="text-sm text-white/70">{user?.username}</span>
-            <Button
-              type="button"
-              variant="ghost"
-              className="border-white/20 px-3 py-1.5 text-xs text-white hover:enabled:bg-white/10"
-              onClick={() => void onLogout()}
-            >
-              退出
-            </Button>
-          </div>
+
+        <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto px-3 py-4">
+          {navItems.map((item) => (
+            <NavLink key={item.to} to={item.to} end={'end' in item ? item.end : undefined} className={navClass}>
+              {item.label}
+            </NavLink>
+          ))}
         </nav>
-      </header>
-      <main className="mx-auto w-[min(1120px,calc(100%-2rem))] py-8 pb-12">
-        <Outlet />
-      </main>
-      <footer className="px-6 pb-6 pt-4 text-center text-sm text-muted">
-        Starlink Console · API via /api/v1
-      </footer>
+
+        <div className="border-t border-white/10 px-4 py-4">
+          <div className="mb-2 truncate text-sm text-white/70" title={user?.username}>
+            {user?.username}
+          </div>
+          <Button
+            type="button"
+            variant="ghost"
+            className="w-full border-white/20 px-3 py-1.5 text-xs text-white hover:enabled:bg-white/10"
+            onClick={() => void onLogout()}
+          >
+            退出
+          </Button>
+          <p className="mt-3 text-[11px] leading-snug text-white/35">Starlink · /api/v1</p>
+        </div>
+      </aside>
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        <main className="mx-auto w-full max-w-[1120px] flex-1 px-6 py-8 pb-12 animate-rise">
+          <Outlet />
+        </main>
+      </div>
     </div>
   )
 }

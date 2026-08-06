@@ -22,6 +22,7 @@ const (
 // Splitter 将主任务按用户分片拆成子任务（流式落库：边圈人边 CreateSubTasks）
 type Splitter struct {
 	tasks     port.TaskRepository
+	push      port.PushRepository
 	audience  AudienceResolver
 	limiter   port.ChannelLimiter
 	batchSize int
@@ -34,15 +35,20 @@ type AudienceResolver interface {
 	Resolve(ctx context.Context, query domain.AudienceQuery) (*domain.AudiencePage, error)
 }
 
-func NewSplitter(tasks port.TaskRepository, audience AudienceResolver, limiter port.ChannelLimiter, batchSize int) *Splitter {
+func NewSplitter(tasks port.TaskRepository, audience AudienceResolver, limiter port.ChannelLimiter, batchSize int, push ...port.PushRepository) *Splitter {
 	if batchSize <= 0 {
 		batchSize = 200
 	}
 	if batchSize > defaultMaxPageSize {
 		batchSize = defaultMaxPageSize
 	}
+	var pushRepo port.PushRepository
+	if len(push) > 0 {
+		pushRepo = push[0]
+	}
 	return &Splitter{
 		tasks:     tasks,
+		push:      pushRepo,
 		audience:  audience,
 		limiter:   limiter,
 		batchSize: batchSize,
@@ -117,8 +123,11 @@ func (s *Splitter) Split(ctx context.Context, main *domain.MainTask, owner strin
 			varMap := make(map[string]map[string]string)
 			chMap := make(map[string][]domain.ChannelType)
 			extraMap := make(map[string]map[string]any)
+			localeMap := make(map[string]string)
+			tzMap := make(map[string]string)
 
 			abPercent := -1
+			abSalt := main.ExperimentSalt
 			if extra != nil {
 				switch v := extra["ab_sample_percent"].(type) {
 				case float64:
@@ -126,13 +135,41 @@ func (s *Splitter) Split(ctx context.Context, main *domain.MainTask, owner strin
 				case int:
 					abPercent = v
 				}
+				if s, ok := extra["ab_sample_salt"].(string); ok && s != "" && abSalt == "" {
+					abSalt = s
+				}
 			}
 
+			var assigns []domain.ExperimentAssignment
 			for _, u := range page.Users {
 				if u.UserID == "" {
 					continue
 				}
-				if abPercent >= 0 && !audience.SampleByPercent(u.UserID, abPercent) {
+				userExtra := u.Extra
+				if userExtra == nil {
+					userExtra = map[string]any{}
+				} else {
+					// copy so we can annotate experiment group
+					cp := make(map[string]any, len(userExtra)+2)
+					for k, v := range userExtra {
+						cp[k] = v
+					}
+					userExtra = cp
+				}
+				if main.ExperimentID != "" || main.ExperimentControlPercent > 0 {
+					group := audience.ExperimentGroup(u.UserID, abSalt, main.ExperimentControlPercent)
+					userExtra["experiment_id"] = main.ExperimentID
+					userExtra["experiment_group"] = group
+					assigns = append(assigns, domain.ExperimentAssignment{
+						MainTaskID:   main.ID,
+						UserID:       u.UserID,
+						ExperimentID: main.ExperimentID,
+						GroupName:    group,
+					})
+					if group == "control" {
+						continue
+					}
+				} else if abPercent >= 0 && !audience.SampleByPercentWithSalt(u.UserID, abSalt, abPercent) {
 					continue
 				}
 				chs := domain.IntersectChannels(taskChs, u.Channels)
@@ -147,8 +184,19 @@ func (s *Splitter) Split(ctx context.Context, main *domain.MainTask, owner strin
 				if len(u.Channels) > 0 {
 					chMap[u.UserID] = chs
 				}
-				if len(u.Extra) > 0 {
-					extraMap[u.UserID] = u.Extra
+				if len(userExtra) > 0 {
+					extraMap[u.UserID] = userExtra
+				}
+				if u.Locale != "" {
+					localeMap[u.UserID] = u.Locale
+				}
+				if u.Timezone != "" {
+					tzMap[u.UserID] = u.Timezone
+				}
+			}
+			if len(assigns) > 0 && s.push != nil {
+				if err := s.push.CreateExperimentAssignments(ctx, assigns); err != nil {
+					slog.Warn("save experiment assignments failed", "main_task_id", main.ID, "err", err)
 				}
 			}
 			if len(ids) == 0 {
@@ -172,6 +220,12 @@ func (s *Splitter) Split(ctx context.Context, main *domain.MainTask, owner strin
 			if len(extraMap) > 0 {
 				// 用户级 Extra（手机号/邮箱/device token 等）随子任务落库；敏感字段建议上游加密或短期保留
 				payload["extras"] = extraMap
+			}
+			if len(localeMap) > 0 {
+				payload["locales"] = localeMap
+			}
+			if len(tzMap) > 0 {
+				payload["timezones"] = tzMap
 			}
 			raw, _ := json.Marshal(payload)
 			batch := []domain.SubTask{{
