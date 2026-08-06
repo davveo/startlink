@@ -21,8 +21,12 @@ func Fail(c *gin.Context, err error) {
 	if e, ok := err.(*errcode.Error); ok {
 		status := http.StatusOK
 		switch {
+		case e.Code == 40101:
+			status = http.StatusUnauthorized
 		case e.Code == 40901 || e.Code == 40902 || e.Code == 40903:
 			status = http.StatusConflict
+		case e.Code == 42901:
+			status = http.StatusTooManyRequests
 		case e.Code >= 50000:
 			status = http.StatusInternalServerError
 		case e.Code >= 40000 && e.Code < 50000:

@@ -18,6 +18,7 @@ func New(code int, msg string) *Error {
 var (
 	OK                = New(0, "ok")
 	InvalidParam      = New(40001, "invalid parameter")
+	Unauthorized      = New(40101, "unauthorized")
 	NotFound          = New(40401, "resource not found")
 	Conflict          = New(40901, "resource conflict")
 	Internal          = New(50001, "internal error")

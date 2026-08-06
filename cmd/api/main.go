@@ -13,6 +13,7 @@ import (
 	"github.com/starlink/push/internal/app/callback"
 	"github.com/starlink/push/internal/app/campaign"
 	apptpl "github.com/starlink/push/internal/app/template"
+	"github.com/starlink/push/internal/auth"
 	"github.com/starlink/push/internal/bootstrap"
 	"github.com/starlink/push/internal/domain"
 	"github.com/starlink/push/internal/handler"
@@ -45,8 +46,11 @@ func main() {
 	})
 	callbackSvc := callback.NewService(infra.Push, infra.Tasks)
 	templateSvc := apptpl.NewService(infra.Templates)
+	sessions := auth.NewManager(infra.Cfg.Auth)
 
 	engine := server.New(infra.Cfg.Server.Mode, server.Deps{
+		Auth:     handler.NewAuthHandler(sessions),
+		Sessions: sessions,
 		Campaign: handler.NewCampaignHandler(campaignSvc, infra.Channels),
 		Callback: handler.NewCallbackHandler(callbackSvc),
 		Template: handler.NewTemplateHandler(templateSvc),
