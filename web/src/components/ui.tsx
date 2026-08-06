@@ -1,4 +1,12 @@
-import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes, TextareaHTMLAttributes } from 'react'
+import {
+  useEffect,
+  type ButtonHTMLAttributes,
+  type InputHTMLAttributes,
+  type ReactNode,
+  type SelectHTMLAttributes,
+  type TextareaHTMLAttributes,
+} from 'react'
+import { createPortal } from 'react-dom'
 import { Link, type LinkProps } from 'react-router-dom'
 import { cn } from '../lib/cn'
 
@@ -223,5 +231,74 @@ export function Td({
     <td colSpan={colSpan} title={title} className={cn('border-b border-line px-2 py-3 align-top', className)}>
       {children}
     </td>
+  )
+}
+
+/** 轻量模态框：遮罩 + 居中面板，Esc / 点遮罩关闭 */
+export function Modal({
+  open,
+  title,
+  onClose,
+  children,
+  className,
+  wide,
+}: {
+  open: boolean
+  title: ReactNode
+  onClose: () => void
+  children: ReactNode
+  className?: string
+  /** 较宽面板（权限勾选等） */
+  wide?: boolean
+}) {
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.body.style.overflow = prev
+    }
+  }, [open, onClose])
+
+  if (!open) return null
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-ink/35 p-4 backdrop-blur-[2px] sm:items-center"
+      role="presentation"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        className={cn(
+          'animate-rise my-4 w-full rounded-[10px] border border-line/90 bg-white p-5 shadow-panel sm:my-8',
+          wide ? 'max-w-3xl' : 'max-w-lg',
+          className,
+        )}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <h2 className="text-lg font-semibold text-ink">{title}</h2>
+          <button
+            type="button"
+            aria-label="关闭"
+            className="rounded-lg px-2 py-1 text-sm text-muted transition hover:bg-paper-deep hover:text-ink"
+            onClick={onClose}
+          >
+            ×
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>,
+    document.body,
   )
 }

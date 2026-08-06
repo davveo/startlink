@@ -158,24 +158,27 @@ export function RecordsPage() {
       {msg ? <Toast kind="ok">{msg}</Toast> : null}
 
       <Panel>
-        <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
-          <Field label="主任务 ID" hint="从分析页「用户流水」进入时会自动带上。">
+        {/* 筛选项单独一行；查询/导出放下一行，避免 hint/按钮插队错位 */}
+        <div className="flex flex-wrap items-end gap-3">
+          <Field label="主任务 ID" noMargin className="min-w-[9rem] flex-[1_1_9rem]">
             <Input
               className="font-mono text-sm"
               value={taskId}
               onChange={(e) => setTaskId(e.target.value)}
               placeholder="task id"
+              title="从分析页「用户流水」进入时会自动带上"
             />
           </Field>
-          <Field label="用户 ID" hint="精确匹配流水中的用户 ID。">
+          <Field label="用户 ID" noMargin className="min-w-[9rem] flex-[1_1_9rem]">
             <Input
               className="font-mono text-sm"
               value={userFilter}
               onChange={(e) => setUserFilter(e.target.value)}
               placeholder="u_demo_1"
+              title="精确匹配流水中的用户 ID"
             />
           </Field>
-          <Field label="状态">
+          <Field label="状态" noMargin className="min-w-[8rem] flex-[1_1_8rem]">
             <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
               <option value="">全部</option>
               <option value="queued">已入队</option>
@@ -188,33 +191,36 @@ export function RecordsPage() {
               <option value="unreachable">不可达</option>
             </Select>
           </Field>
-          <Field label="渠道" hint="如站内信 / 短信 / App 推送。">
+          <Field label="渠道" noMargin className="min-w-[8rem] flex-[1_1_8rem]">
             <Input
               className="font-mono text-sm"
               value={channelFilter}
               onChange={(e) => setChannelFilter(e.target.value)}
               placeholder="inbox"
+              title="如站内信 / 短信 / App 推送"
             />
           </Field>
         </div>
-        <BtnRow className="mt-1">
-          <Button variant="ink" type="button" disabled={busy} onClick={onQuery}>
-            查询
-          </Button>
-          <Can perm={Perm.CampaignExport}>
-            <Button variant="ghost" type="button" disabled={busy || !activeTask} onClick={() => void startExport()}>
-              异步导出
+        <div className="mt-3 flex flex-wrap items-end gap-3">
+          <BtnRow className="shrink-0">
+            <Button variant="ink" type="button" disabled={busy} onClick={onQuery}>
+              查询
             </Button>
-            {activeTask > 0 ? (
-              <a
-                className="inline-flex items-center justify-center rounded-full border border-line px-4 py-2 text-sm font-semibold"
-                href={api.exportSyncUrl(activeTask, 'records')}
-              >
-                同步 CSV
-              </a>
-            ) : null}
-          </Can>
-        </BtnRow>
+            <Can perm={Perm.CampaignExport}>
+              <Button variant="ghost" type="button" disabled={busy || !activeTask} onClick={() => void startExport()}>
+                异步导出
+              </Button>
+              {activeTask > 0 ? (
+                <a
+                  className="inline-flex items-center justify-center rounded-full border border-line px-4 py-2 text-sm font-semibold"
+                  href={api.exportSyncUrl(activeTask, 'records')}
+                >
+                  同步 CSV
+                </a>
+              ) : null}
+            </Can>
+          </BtnRow>
+        </div>
         {exportJob ? (
           <p className="mt-3 text-sm text-muted">
             导出 #{exportJob.id} <StatusChip status={exportJob.status} />{' '}

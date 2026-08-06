@@ -6,10 +6,10 @@ import {
   Empty,
   Field,
   Input,
+  Modal,
   Mono,
   PageHead,
   Panel,
-  PanelTitle,
   Select,
   TableWrap,
   Td,
@@ -138,60 +138,74 @@ export function SettingsPermissionsPage() {
       {msg ? <Toast kind="ok">{msg}</Toast> : null}
 
       <Panel>
-        <div className="mb-4 flex flex-wrap items-end gap-3">
-          <Field label="关键词" noMargin className="min-w-[10rem]">
-            <Input
-              placeholder="码 / 名称"
-              value={keywordInput}
-              onChange={(e) => setKeywordInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
+        <div className="mb-4">
+          <div className="flex flex-wrap items-end gap-3">
+            <Field label="关键词" noMargin className="min-w-[10rem] flex-[1_1_10rem]">
+              <Input
+                placeholder="码 / 名称"
+                value={keywordInput}
+                onChange={(e) => setKeywordInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    setPage(1)
+                    setKeyword(keywordInput.trim())
+                  }
+                }}
+              />
+            </Field>
+            <Field label="分组" noMargin className="min-w-[8rem] flex-[1_1_8rem]">
+              <Input
+                placeholder="全部"
+                value={group}
+                onChange={(e) => {
+                  setPage(1)
+                  setGroup(e.target.value)
+                }}
+              />
+            </Field>
+            <Field label="类型" noMargin className="min-w-[8rem] flex-[1_1_8rem]">
+              <Select
+                value={kind}
+                onChange={(e) => {
+                  setPage(1)
+                  setKind(e.target.value)
+                }}
+              >
+                <option value="">全部</option>
+                <option value="menu">菜单</option>
+                <option value="action">按钮/操作</option>
+              </Select>
+            </Field>
+          </div>
+          <div className="mt-3 flex flex-wrap items-end gap-3">
+            <BtnRow className="shrink-0">
+              <Button
+                type="button"
+                variant="ghost"
+                disabled={busy}
+                onClick={() => {
                   setPage(1)
                   setKeyword(keywordInput.trim())
-                }
-              }}
-            />
-          </Field>
-          <Field label="分组" noMargin className="min-w-[8rem]">
-            <Input
-              placeholder="全部"
-              value={group}
-              onChange={(e) => {
-                setPage(1)
-                setGroup(e.target.value)
-              }}
-            />
-          </Field>
-          <Field label="类型" noMargin className="min-w-[8rem]">
-            <Select
-              value={kind}
-              onChange={(e) => {
-                setPage(1)
-                setKind(e.target.value)
-              }}
-            >
-              <option value="">全部</option>
-              <option value="menu">菜单</option>
-              <option value="action">按钮/操作</option>
-            </Select>
-          </Field>
-          <Button
-            type="button"
-            variant="ghost"
-            disabled={busy}
-            onClick={() => {
-              setPage(1)
-              setKeyword(keywordInput.trim())
-            }}
-          >
-            查询
-          </Button>
-          <Button type="button" variant="ghost" disabled={busy} onClick={() => void load()}>
-            刷新
-          </Button>
-          <Button type="button" variant="primary" disabled={busy} onClick={() => setShowCreate(true)}>
-            新建权限
-          </Button>
+                }}
+              >
+                查询
+              </Button>
+              <Button type="button" variant="ghost" disabled={busy} onClick={() => void load()}>
+                刷新
+              </Button>
+              <Button
+                type="button"
+                variant="primary"
+                disabled={busy}
+                onClick={() => {
+                  setCreateForm({ code: '', name: '', group: '自定义', kind: 'action', description: '' })
+                  setShowCreate(true)
+                }}
+              >
+                新建权限
+              </Button>
+            </BtnRow>
+          </div>
         </div>
 
         <TableWrap>
@@ -250,104 +264,118 @@ export function SettingsPermissionsPage() {
         </div>
       </Panel>
 
-      {showCreate ? (
-        <Panel className="mt-4">
-          <PanelTitle>新建权限</PanelTitle>
-          <form onSubmit={onCreate}>
-            <div className="grid gap-3 md:grid-cols-2">
-              <Field label="权限码" hint="小写字母开头，如 menu.reports / report.export">
-                <Input
-                  required
-                  className="font-mono text-sm"
-                  value={createForm.code}
-                  onChange={(e) => setCreateForm({ ...createForm, code: e.target.value })}
-                />
-              </Field>
-              <Field label="中文名">
-                <Input
-                  required
-                  value={createForm.name}
-                  onChange={(e) => setCreateForm({ ...createForm, name: e.target.value })}
-                />
-              </Field>
-              <Field label="分组">
-                <Input
-                  value={createForm.group}
-                  onChange={(e) => setCreateForm({ ...createForm, group: e.target.value })}
-                />
-              </Field>
-              <Field label="类型">
-                <Select
-                  value={createForm.kind}
-                  onChange={(e) => setCreateForm({ ...createForm, kind: e.target.value })}
-                >
-                  <option value="menu">菜单</option>
-                  <option value="action">按钮/操作</option>
-                </Select>
-              </Field>
-              <Field label="说明（可选）" className="md:col-span-2">
-                <Input
-                  value={createForm.description}
-                  onChange={(e) => setCreateForm({ ...createForm, description: e.target.value })}
-                />
-              </Field>
-            </div>
-            <BtnRow className="mt-1">
-              <Button type="submit" variant="primary" disabled={busy}>
-                创建
-              </Button>
-              <Button type="button" variant="ghost" disabled={busy} onClick={() => setShowCreate(false)}>
-                取消
-              </Button>
-            </BtnRow>
-          </form>
-        </Panel>
-      ) : null}
-
-      {editing ? (
-        <Panel className="mt-4">
-          <PanelTitle>
-            编辑权限 <Mono className="text-base">{editing}</Mono>
-          </PanelTitle>
-          <div className="grid gap-3 md:grid-cols-2">
-            <Field label="中文名">
+      <Modal
+        open={showCreate}
+        title="新建权限"
+        onClose={() => {
+          if (!busy) setShowCreate(false)
+        }}
+      >
+        <form onSubmit={onCreate}>
+          <div className="mb-1 grid items-end gap-3 sm:grid-cols-2">
+            <Field
+              label="权限码"
+              noMargin
+              className="sm:col-span-2"
+              hint="小写字母开头，如 menu.reports / report.export"
+            >
               <Input
-                value={editForm.name}
-                onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+                required
+                className="font-mono text-sm"
+                value={createForm.code}
+                onChange={(e) => setCreateForm({ ...createForm, code: e.target.value })}
+                placeholder="menu.reports"
               />
             </Field>
-            <Field label="分组">
+            <Field label="中文名" noMargin>
               <Input
-                value={editForm.group}
-                onChange={(e) => setEditForm({ ...editForm, group: e.target.value })}
+                required
+                value={createForm.name}
+                onChange={(e) => setCreateForm({ ...createForm, name: e.target.value })}
               />
             </Field>
-            <Field label="类型">
+            <Field label="分组" noMargin>
+              <Input
+                value={createForm.group}
+                onChange={(e) => setCreateForm({ ...createForm, group: e.target.value })}
+              />
+            </Field>
+            <Field label="类型" noMargin>
               <Select
-                value={editForm.kind}
-                onChange={(e) => setEditForm({ ...editForm, kind: e.target.value })}
+                value={createForm.kind}
+                onChange={(e) => setCreateForm({ ...createForm, kind: e.target.value })}
               >
                 <option value="menu">菜单</option>
                 <option value="action">按钮/操作</option>
               </Select>
             </Field>
-            <Field label="说明">
+            <Field label="说明（可选）" noMargin className="sm:col-span-2">
               <Input
-                value={editForm.description}
-                onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
+                value={createForm.description}
+                onChange={(e) => setCreateForm({ ...createForm, description: e.target.value })}
               />
             </Field>
           </div>
-          <BtnRow className="mt-1">
-            <Button type="button" variant="primary" disabled={busy} onClick={() => void onSaveEdit()}>
-              保存
+          <BtnRow className="mt-3">
+            <Button type="submit" variant="primary" disabled={busy}>
+              创建
             </Button>
-            <Button type="button" variant="ghost" disabled={busy} onClick={() => setEditing(null)}>
+            <Button type="button" variant="ghost" disabled={busy} onClick={() => setShowCreate(false)}>
               取消
             </Button>
           </BtnRow>
-        </Panel>
-      ) : null}
+        </form>
+      </Modal>
+
+      <Modal
+        open={!!editing}
+        title={
+          <>
+            编辑权限 {editing ? <Mono className="text-base">{editing}</Mono> : null}
+          </>
+        }
+        onClose={() => {
+          if (!busy) setEditing(null)
+        }}
+      >
+        <div className="mb-1 grid items-end gap-3 sm:grid-cols-2">
+          <Field label="中文名" noMargin>
+            <Input
+              value={editForm.name}
+              onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+            />
+          </Field>
+          <Field label="分组" noMargin>
+            <Input
+              value={editForm.group}
+              onChange={(e) => setEditForm({ ...editForm, group: e.target.value })}
+            />
+          </Field>
+          <Field label="类型" noMargin>
+            <Select
+              value={editForm.kind}
+              onChange={(e) => setEditForm({ ...editForm, kind: e.target.value })}
+            >
+              <option value="menu">菜单</option>
+              <option value="action">按钮/操作</option>
+            </Select>
+          </Field>
+          <Field label="说明" noMargin>
+            <Input
+              value={editForm.description}
+              onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
+            />
+          </Field>
+        </div>
+        <BtnRow className="mt-3">
+          <Button type="button" variant="primary" disabled={busy} onClick={() => void onSaveEdit()}>
+            保存
+          </Button>
+          <Button type="button" variant="ghost" disabled={busy} onClick={() => setEditing(null)}>
+            取消
+          </Button>
+        </BtnRow>
+      </Modal>
     </div>
   )
 }
