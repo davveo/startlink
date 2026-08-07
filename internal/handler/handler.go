@@ -1,7 +1,13 @@
 package handler
 
 import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/starlink/push/internal/adapter/channel"
@@ -189,16 +195,34 @@ func (h *CampaignHandler) Overview(c *gin.Context) {
 }
 
 type CallbackHandler struct {
-	svc *callback.Service
+	svc      *callback.Service
+	verifier *callback.Verifier
 }
 
-func NewCallbackHandler(svc *callback.Service) *CallbackHandler {
-	return &CallbackHandler{svc: svc}
+func NewCallbackHandler(svc *callback.Service, verifier *callback.Verifier) *CallbackHandler {
+	return &CallbackHandler{svc: svc, verifier: verifier}
 }
 
 func (h *CallbackHandler) Receive(c *gin.Context) {
+	raw, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		response.Fail(c, errcode.InvalidParam)
+		return
+	}
+	if err := h.verifier.Verify(
+		c.Request.Context(),
+		c.GetHeader("X-Starlink-Timestamp"),
+		c.GetHeader("X-Starlink-Nonce"),
+		c.GetHeader("X-Starlink-Signature"),
+		raw,
+	); err != nil {
+		response.Fail(c, err)
+		return
+	}
 	var in callback.ReceiptInput
-	if err := c.ShouldBindJSON(&in); err != nil {
+	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&in); err != nil || in.ProviderID == "" || in.Event == "" {
 		response.Fail(c, errcode.InvalidParam)
 		return
 	}
@@ -211,4 +235,22 @@ func (h *CallbackHandler) Receive(c *gin.Context) {
 
 func Health(c *gin.Context) {
 	response.OK(c, gin.H{"status": "up"})
+}
+
+func Readiness(checks ...func(context.Context) error) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
+		defer cancel()
+		for _, check := range checks {
+			if check != nil {
+				if err := check(ctx); err != nil {
+					c.JSON(http.StatusServiceUnavailable, response.Body{
+						Code: errcode.Internal.Code, Message: "service not ready",
+					})
+					return
+				}
+			}
+		}
+		response.OK(c, gin.H{"status": "ready"})
+	}
 }

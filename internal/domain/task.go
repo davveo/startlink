@@ -31,7 +31,7 @@ type MainTask struct {
 	FailCount        int64            `gorm:"not null;default:0" json:"fail_count"`
 	SubTaskTotal     int              `gorm:"not null;default:0" json:"sub_task_total"`
 	SubTaskDone      int              `gorm:"not null;default:0" json:"sub_task_done"`
-	Status           TaskStatus       `gorm:"size:32;not null;index;default:pending" json:"status"`
+	Status           TaskStatus       `gorm:"size:32;not null;index;index:idx_main_schedule,priority:1;default:pending" json:"status"`
 	Version          int64            `gorm:"not null;default:0" json:"version"`
 	WebhookURL       string           `gorm:"size:512" json:"webhook_url,omitempty"`
 	// CreatedBy 业务负责人/创建人（非拆分租约）
@@ -61,7 +61,7 @@ type MainTask struct {
 	// SplitOwner / SplitLeaseAt：拆分租约，防止 pending→running 后崩溃导致永久卡单
 	SplitOwner   string     `gorm:"size:64;index" json:"split_owner,omitempty"`
 	SplitLeaseAt *time.Time `gorm:"index" json:"split_lease_at,omitempty"`
-	ScheduledAt  *time.Time `json:"scheduled_at,omitempty"`
+	ScheduledAt  *time.Time `gorm:"index:idx_main_schedule,priority:2" json:"scheduled_at,omitempty"`
 	StartedAt    *time.Time `json:"started_at,omitempty"`
 	FinishedAt   *time.Time `json:"finished_at,omitempty"`
 	CreatedAt    time.Time  `json:"created_at"`
@@ -151,16 +151,16 @@ func (t *MainTask) LocalesMap() map[string]LocaleContent {
 // SubTask 子任务：按用户分片，支持多 worker 并发认领
 type SubTask struct {
 	ID           uint64     `gorm:"primaryKey;autoIncrement" json:"id"`
-	MainTaskID   uint64     `gorm:"index;not null" json:"main_task_id"`
+	MainTaskID   uint64     `gorm:"index;index:idx_sub_main_status,priority:1;not null" json:"main_task_id"`
 	ShardIndex   int        `gorm:"not null" json:"shard_index"`
 	UserIDs      string     `gorm:"type:mediumtext;not null" json:"user_ids"` // JSON 数组
 	TotalCount   int        `gorm:"not null;default:0" json:"total_count"`
 	SuccessCount int        `gorm:"not null;default:0" json:"success_count"`
 	FailCount    int        `gorm:"not null;default:0" json:"fail_count"`
-	Status       TaskStatus `gorm:"size:32;not null;index;default:pending" json:"status"`
+	Status       TaskStatus `gorm:"size:32;not null;index;index:idx_sub_claim,priority:1;index:idx_sub_main_status,priority:2;default:pending" json:"status"`
 	RetryCount   int        `gorm:"not null;default:0" json:"retry_count"`
 	WorkerID     string     `gorm:"size:64;index" json:"worker_id,omitempty"` // 认领者，便于水平扩展抢占
-	ClaimedAt    *time.Time `json:"claimed_at,omitempty"`
+	ClaimedAt    *time.Time `gorm:"index:idx_sub_claim,priority:2" json:"claimed_at,omitempty"`
 	StartedAt    *time.Time `json:"started_at,omitempty"`
 	FinishedAt   *time.Time `json:"finished_at,omitempty"`
 	LastError    string     `gorm:"size:512" json:"last_error,omitempty"`
@@ -174,18 +174,18 @@ func (SubTask) TableName() string { return "sub_tasks" }
 // 渠道回执定位：(provider, channel, provider_id)；provider_id 为空时不占唯一约束（MySQL NULL 可多行）。
 type PushRecord struct {
 	ID         uint64      `gorm:"primaryKey;autoIncrement" json:"id"`
-	MainTaskID uint64      `gorm:"uniqueIndex:uk_task_user_channel;not null" json:"main_task_id"`
+	MainTaskID uint64      `gorm:"uniqueIndex:uk_task_user_channel;index:idx_push_task_status,priority:1;not null" json:"main_task_id"`
 	SubTaskID  uint64      `gorm:"index;not null" json:"sub_task_id"`
 	UserID     string      `gorm:"size:64;uniqueIndex:uk_task_user_channel;not null" json:"user_id"`
 	Channel    ChannelType `gorm:"size:32;uniqueIndex:uk_task_user_channel;uniqueIndex:uk_provider_ref;not null" json:"channel"`
 	Content    string      `gorm:"type:text" json:"content"`
-	Status     PushStatus  `gorm:"size:32;not null;index;default:queued" json:"status"`
+	Status     PushStatus  `gorm:"size:32;not null;index;index:idx_push_task_status,priority:3;default:queued" json:"status"`
 	// Provider 渠道供应商标识（默认与 channel 同名，HTTP 适配器可覆盖）
 	Provider string `gorm:"size:64;uniqueIndex:uk_provider_ref" json:"provider,omitempty"`
 	// ProviderID 渠道侧消息 ID；未发送时为 NULL，避免空串撞唯一键
-	ProviderID *string    `gorm:"size:128;uniqueIndex:uk_provider_ref" json:"provider_id,omitempty"`
-	ErrorMsg   string     `gorm:"size:512" json:"error_msg,omitempty"`
-	IsTest     bool       `gorm:"not null;default:false;index" json:"is_test"`
+	ProviderID *string `gorm:"size:128;uniqueIndex:uk_provider_ref" json:"provider_id,omitempty"`
+	ErrorMsg   string  `gorm:"size:512" json:"error_msg,omitempty"`
+	IsTest     bool    `gorm:"not null;default:false;index;index:idx_push_task_status,priority:2" json:"is_test"`
 	// ExperimentGroup control|treatment（实验看板聚合）
 	ExperimentGroup string     `gorm:"size:32;index" json:"experiment_group,omitempty"`
 	SentAt          *time.Time `json:"sent_at,omitempty"`

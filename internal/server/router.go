@@ -1,8 +1,12 @@
 package server
 
 import (
+	"net/http"
+	"strings"
+
 	"github.com/gin-gonic/gin"
 	"github.com/starlink/push/internal/auth"
+	"github.com/starlink/push/internal/config"
 	"github.com/starlink/push/internal/handler"
 	"github.com/starlink/push/internal/port"
 )
@@ -17,19 +21,25 @@ type Deps struct {
 	Notification *handler.NotificationHandler
 	Audit        *handler.AuditHandler
 	AuditRepo    port.AuditLogRepository
+	Ready        gin.HandlerFunc
 }
 
-func New(mode string, deps Deps) *gin.Engine {
-	if mode == "release" {
+func New(cfg config.ServerConfig, deps Deps) *gin.Engine {
+	if cfg.Mode == "release" {
 		gin.SetMode(gin.ReleaseMode)
 	}
+	gin.EnableJsonDecoderDisallowUnknownFields()
+	gin.EnableJsonDecoderUseNumber()
 	r := gin.New()
-	r.Use(gin.Recovery(), gin.Logger(), corsMiddleware())
+	r.Use(gin.Recovery(), gin.Logger(), bodyLimitMiddleware(cfg.MaxBodyBytes), corsMiddleware(cfg.AllowedOrigins))
 	if deps.AuditRepo != nil {
 		r.Use(AuditMiddleware(deps.AuditRepo))
 	}
 
 	r.GET("/healthz", handler.Health)
+	if deps.Ready != nil {
+		r.GET("/readyz", deps.Ready)
+	}
 
 	api := r.Group("/api/v1")
 	{
@@ -123,7 +133,6 @@ func New(mode string, deps Deps) *gin.Engine {
 				protected.PUT("/rbac/roles/:role", perm(auth.PermRBACManage), deps.RBAC.UpdateRole)
 				protected.GET("/rbac/users", perm(auth.PermRBACManage), deps.RBAC.ListUsers)
 				protected.POST("/rbac/users", perm(auth.PermRBACManage), deps.RBAC.CreateUser)
-				protected.GET("/rbac/users/:username/secret", perm(auth.PermRBACManage), deps.RBAC.GetUserSecret)
 				protected.POST("/rbac/users/:username/reset-password", perm(auth.PermRBACManage), deps.RBAC.ResetPassword)
 				protected.PUT("/rbac/users/:username/role", perm(auth.PermRBACManage), deps.RBAC.SetUserRole)
 				protected.PUT("/rbac/users/:username", perm(auth.PermRBACManage), deps.RBAC.UpdateUser)
@@ -139,16 +148,45 @@ func noopPerm(_ string) gin.HandlerFunc {
 }
 
 // corsMiddleware 便于本地 Vite 直连 API；Compose 下前端走 nginx 同源反代可不依赖 CORS。
-func corsMiddleware() gin.HandlerFunc {
+func bodyLimitMiddleware(limit int64) gin.HandlerFunc {
+	if limit <= 0 {
+		limit = 2 << 20
+	}
 	return func(c *gin.Context) {
-		origin := c.GetHeader("Origin")
+		if c.Request.Body != nil {
+			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, limit)
+		}
+		c.Next()
+	}
+}
+
+func corsMiddleware(allowedOrigins []string) gin.HandlerFunc {
+	allowed := make(map[string]struct{}, len(allowedOrigins))
+	for _, origin := range allowedOrigins {
+		if origin = strings.TrimRight(strings.TrimSpace(origin), "/"); origin != "" {
+			allowed[origin] = struct{}{}
+		}
+	}
+	return func(c *gin.Context) {
+		origin := strings.TrimRight(c.GetHeader("Origin"), "/")
 		if origin == "" {
 			c.Next()
 			return
 		}
+		// 浏览器对同源的写请求同样发送 Origin；此处放行，否则从 allowed_origins
+		// 之外的地址（127.0.0.1、内网 IP、自定义域名）打开控制台会 403。
+		if origin == requestOrigin(c.Request) {
+			c.Next()
+			return
+		}
+		if _, ok := allowed[origin]; !ok {
+			c.AbortWithStatus(http.StatusForbidden)
+			return
+		}
+		c.Header("Vary", "Origin")
 		c.Header("Access-Control-Allow-Origin", origin)
 		c.Header("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS")
-		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Starlink-Timestamp, X-Starlink-Nonce, X-Starlink-Signature")
 		c.Header("Access-Control-Allow-Credentials", "true")
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(204)
@@ -156,4 +194,18 @@ func corsMiddleware() gin.HandlerFunc {
 		}
 		c.Next()
 	}
+}
+
+// requestOrigin 还原本次请求自身的 origin，兼容 nginx 反代（X-Forwarded-Proto + Host）。
+func requestOrigin(r *http.Request) string {
+	if r == nil || r.Host == "" {
+		return ""
+	}
+	scheme := "http"
+	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
+		scheme = strings.ToLower(strings.TrimSpace(strings.Split(proto, ",")[0]))
+	} else if r.TLS != nil {
+		scheme = "https"
+	}
+	return scheme + "://" + r.Host
 }

@@ -100,12 +100,33 @@ func (p *DemoProvider) Supports(bizScene string) bool {
 	return ok
 }
 
+// extraInt 读取人群 extra 中的整数字段。HTTP 入参经 gin 解码为 json.Number，
+// 而任务落库后重新解析为 float64，两种来源都要认。
+func extraInt(extra map[string]any, key string) (int, bool) {
+	if extra == nil {
+		return 0, false
+	}
+	switch v := extra[key].(type) {
+	case json.Number:
+		n, err := v.Int64()
+		return int(n), err == nil
+	case float64:
+		return int(v), true
+	case int:
+		return v, true
+	case int64:
+		return int(v), true
+	case string:
+		n, err := strconv.Atoi(strings.TrimSpace(v))
+		return n, err == nil
+	}
+	return 0, false
+}
+
 func (p *DemoProvider) Resolve(ctx context.Context, query domain.AudienceQuery) (*domain.AudiencePage, error) {
 	total := 500
-	if v, ok := query.Extra["total"].(float64); ok {
-		total = int(v)
-	} else if v, ok := query.Extra["total"].(int); ok {
-		total = v
+	if n, ok := extraInt(query.Extra, "total"); ok {
+		total = n
 	}
 
 	pageSize := query.PageSize

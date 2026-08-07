@@ -39,6 +39,19 @@ redis.call('EXPIRE', KEYS[1], 120)
 return {allowed, tokens}
 `)
 
+const (
+	// adaptLookupTimeout 读取自适应收缩系数的最长阻塞时间
+	adaptLookupTimeout = 200 * time.Millisecond
+	// degradedRateFactor Redis 不可用时本地桶相对配额的保守系数
+	degradedRateFactor = 0.5
+	degradedKeyPrefix  = "degraded:"
+)
+
+// degraded 降级速率下限保 1，避免配额过小时完全停发
+func degraded(v float64) float64 {
+	return maxFloat(1, v*degradedRateFactor)
+}
+
 // ChannelQuotaLimiter 渠道 × 优先级配额；distributed=false 时用进程内桶。
 type ChannelQuotaLimiter struct {
 	rdb    *redis.Client
@@ -98,7 +111,7 @@ func (l *ChannelQuotaLimiter) TargetFinishMinutes(channel domain.ChannelType) in
 	return e.TargetFinishMinutes
 }
 
-func (l *ChannelQuotaLimiter) ratesFor(ch domain.ChannelType, prio domain.Priority) (rate, burst float64, split bool) {
+func (l *ChannelQuotaLimiter) ratesFor(ctx context.Context, ch domain.ChannelType, prio domain.Priority) (rate, burst float64, split bool) {
 	e, ok := l.cfgEntry(ch)
 	if !ok || e.QPS <= 0 {
 		return 0, 0, false
@@ -110,7 +123,7 @@ func (l *ChannelQuotaLimiter) ratesFor(ch domain.ChannelType, prio domain.Priori
 	if ratio > 1 {
 		ratio = 1
 	}
-	total := float64(e.QPS) * l.adaptMult(context.Background(), ch)
+	total := float64(e.QPS) * l.adaptMult(ctx, ch)
 	b := float64(e.Burst)
 	if b <= 0 {
 		b = float64(e.QPS)
@@ -131,11 +144,15 @@ func maxFloat(a, b float64) float64 {
 	return b
 }
 
+// AvailableQPS 属 port.ChannelLimiter 契约（无 ctx）。内部读 Redis 自适应系数，
+// 用短超时兜底，避免半开连接把调用方阻塞到读超时。
 func (l *ChannelQuotaLimiter) AvailableQPS(channel domain.ChannelType, priority domain.Priority) float64 {
 	if !l.cfg.Enabled {
 		return float64(l.legacy)
 	}
-	rate, _, _ := l.ratesFor(channel, priority)
+	ctx, cancel := context.WithTimeout(context.Background(), adaptLookupTimeout)
+	defer cancel()
+	rate, _, _ := l.ratesFor(ctx, channel, priority)
 	return rate
 }
 
@@ -206,7 +223,7 @@ func (l *ChannelQuotaLimiter) Wait(ctx context.Context, channel domain.ChannelTy
 		}
 	}
 
-	rate, burst, split := l.ratesFor(channel, priority)
+	rate, burst, split := l.ratesFor(wctx, channel, priority)
 	if rate <= 0 {
 		slog.Warn("channel quota missing, fail-open after global", "channel", channel)
 		return nil
@@ -243,8 +260,10 @@ func (l *ChannelQuotaLimiter) waitRedis(ctx context.Context, scope, prio string,
 			if ctx.Err() != nil {
 				return domain.ErrChannelThrottled
 			}
-			slog.Warn("quota redis error, fail-open once", "key", key, "err", err)
-			return nil
+			// 无限放行会让多实例在 Redis 故障期间全速打供应商；
+			// 降级到进程内桶并按保守系数收缩（假定多实例共享同一配额）。
+			slog.Warn("quota redis error, degrade to local bucket", "key", key, "err", err)
+			return l.waitLocal(ctx, degradedKeyPrefix+key, degraded(rate), degraded(burst))
 		}
 		allowed, _ := toInt64(res[0])
 		if allowed == 1 {
@@ -298,7 +317,7 @@ func (l *ChannelQuotaLimiter) Utilization(ctx context.Context, channel domain.Ch
 	if !l.cfg.Enabled {
 		return 0, nil
 	}
-	rate, burst, split := l.ratesFor(channel, priority)
+	rate, burst, split := l.ratesFor(ctx, channel, priority)
 	if rate <= 0 || burst <= 0 {
 		return 0, nil
 	}

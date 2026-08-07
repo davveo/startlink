@@ -26,7 +26,6 @@ type Account = {
   enabled: boolean
   source: string
   permission_count: number
-  has_password_note?: boolean
 }
 
 type RoleInfo = { role: string; name: string }
@@ -52,10 +51,6 @@ export function SettingsUsersPage() {
     enabled: true,
     display_name: '',
   })
-
-  const [secretUser, setSecretUser] = useState<string | null>(null)
-  const [secretNote, setSecretNote] = useState('')
-  const [secretHint, setSecretHint] = useState('')
 
   const [resetUser, setResetUser] = useState<string | null>(null)
   const [resetPassword, setResetPassword] = useState('')
@@ -85,7 +80,7 @@ export function SettingsUsersPage() {
     setMsg('')
     try {
       const res = await api.createUser(createForm)
-      setMsg(`已创建用户 ${res.username}（初始密码已记入可查看副本）`)
+      setMsg(`已创建用户 ${res.username}`)
       setCreateForm({ username: '', password: '', role: 'viewer', display_name: '' })
       setShowCreate(false)
       await load()
@@ -127,29 +122,6 @@ export function SettingsUsersPage() {
     }
   }
 
-  async function onViewSecret(username: string) {
-    setBusy(true)
-    setErr('')
-    setMsg('')
-    setSecretUser(username)
-    setSecretNote('')
-    setSecretHint('')
-    try {
-      const res = await api.getUserSecret(username)
-      setSecretNote(res.password_note || '')
-      setSecretHint(
-        res.has_note
-          ? '以下为初始 seed / 创建 / 重置时管理员填写的可查看副本（非 bcrypt 反解）。'
-          : res.message || '已设置密码但无可查看副本，请重置后可查看。',
-      )
-    } catch (e) {
-      setSecretUser(null)
-      setErr(e instanceof ApiError ? e.message : '查看密码失败')
-    } finally {
-      setBusy(false)
-    }
-  }
-
   async function onResetPassword(e: FormEvent) {
     e.preventDefault()
     if (!resetUser) return
@@ -158,7 +130,7 @@ export function SettingsUsersPage() {
     setMsg('')
     try {
       await api.resetUserPassword(resetUser, resetPassword)
-      setMsg(`已重置 ${resetUser} 的密码（可查看副本已更新）`)
+      setMsg(`已重置 ${resetUser} 的密码，原有登录会话已失效`)
       setResetUser(null)
       setResetPassword('')
       await load()
@@ -173,7 +145,7 @@ export function SettingsUsersPage() {
     <div>
       <PageHead
         title="用户管理"
-        description="创建与编辑运营账号。登录密码以 bcrypt 存储；「查看密码」仅返回初始/重置时写入的明文副本（列表不展示）。"
+        description="创建与编辑运营账号。登录密码只保存 bcrypt 哈希，无法查看明文。"
         actions={
           <Button
             type="button"
@@ -210,7 +182,6 @@ export function SettingsUsersPage() {
               <Th>显示名</Th>
               <Th>角色</Th>
               <Th>状态</Th>
-              <Th>密码副本</Th>
               <Th>权限数</Th>
               <Th>操作</Th>
             </tr>
@@ -229,7 +200,6 @@ export function SettingsUsersPage() {
                   <Mono>{a.role}</Mono>
                 </Td>
                 <Td>{a.enabled ? '启用' : '禁用'}</Td>
-                <Td>{a.has_password_note ? '可查看' : '已设置请重置'}</Td>
                 <Td>{a.permission_count}</Td>
                 <Td>
                   <div className="flex flex-wrap gap-1">
@@ -240,14 +210,6 @@ export function SettingsUsersPage() {
                       onClick={() => startEdit(a)}
                     >
                       编辑
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      className="px-2 py-1 text-xs"
-                      onClick={() => void onViewSecret(a.username)}
-                    >
-                      查看密码
                     </Button>
                     <Button
                       type="button"
@@ -293,7 +255,8 @@ export function SettingsUsersPage() {
                 type="password"
                 value={createForm.password}
                 onChange={(e) => setCreateForm({ ...createForm, password: e.target.value })}
-                title="至少 4 位；将同时写入可查看副本"
+                minLength={10}
+                title="至少 10 位"
               />
             </Field>
             <Field label="显示名（可选）" noMargin>
@@ -374,28 +337,6 @@ export function SettingsUsersPage() {
       </Modal>
 
       <Modal
-        open={!!secretUser}
-        title={
-          <>
-            查看密码 {secretUser ? <Mono className="text-base">{secretUser}</Mono> : null}
-          </>
-        }
-        onClose={() => setSecretUser(null)}
-      >
-        <p className="mb-2 text-sm text-muted">{secretHint || '加载中…'}</p>
-        {secretNote ? (
-          <p className="rounded-md bg-black/5 px-3 py-2 font-mono text-sm break-all">{secretNote}</p>
-        ) : (
-          <p className="text-sm text-muted">{busy ? '加载中…' : '无可查看副本'}</p>
-        )}
-        <BtnRow className="mt-3">
-          <Button type="button" variant="ghost" onClick={() => setSecretUser(null)}>
-            关闭
-          </Button>
-        </BtnRow>
-      </Modal>
-
-      <Modal
         open={!!resetUser}
         title={
           <>
@@ -410,10 +351,11 @@ export function SettingsUsersPage() {
         }}
       >
         <form onSubmit={onResetPassword}>
-          <Field label="新密码" noMargin hint="至少 4 位；写入 bcrypt 并更新可查看副本">
+          <Field label="新密码" noMargin hint="至少 10 位；重置后该用户的旧会话立即失效">
             <Input
               required
               type="password"
+              minLength={10}
               value={resetPassword}
               onChange={(e) => setResetPassword(e.target.value)}
               autoFocus

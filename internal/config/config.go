@@ -1,8 +1,10 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -19,6 +21,7 @@ type Config struct {
 	Pusher       PusherConfig       `yaml:"pusher"`
 	Campaign     CampaignConfig     `yaml:"campaign"`
 	Webhook      WebhookConfig      `yaml:"webhook"`
+	Callback     CallbackConfig     `yaml:"callback"`
 	Audience     AudienceConfig     `yaml:"audience"`
 	Freq         FreqConfig         `yaml:"freq"`
 	Compliance   ComplianceConfig   `yaml:"compliance"`
@@ -31,6 +34,7 @@ type AuthConfig struct {
 	SessionSecret string     `yaml:"session_secret"`
 	CookieName    string     `yaml:"cookie_name"`
 	TTLHours      int        `yaml:"ttl_hours"`
+	CookieSecure  bool       `yaml:"cookie_secure"`
 	Users         []AuthUser `yaml:"users"`
 }
 
@@ -50,8 +54,14 @@ type LogConfig struct {
 }
 
 type ServerConfig struct {
-	Addr string `yaml:"addr"`
-	Mode string `yaml:"mode"`
+	Addr                 string   `yaml:"addr"`
+	Mode                 string   `yaml:"mode"`
+	AllowedOrigins       []string `yaml:"allowed_origins"`
+	MaxBodyBytes         int64    `yaml:"max_body_bytes"`
+	ReadHeaderTimeoutSec int      `yaml:"read_header_timeout_sec"`
+	ReadTimeoutSec       int      `yaml:"read_timeout_sec"`
+	WriteTimeoutSec      int      `yaml:"write_timeout_sec"`
+	IdleTimeoutSec       int      `yaml:"idle_timeout_sec"`
 }
 
 type MySQLConfig struct {
@@ -170,9 +180,20 @@ type CampaignConfig struct {
 }
 
 type WebhookConfig struct {
-	Enabled    bool   `yaml:"enabled"`
-	DefaultURL string `yaml:"default_url"`
-	TimeoutSec int    `yaml:"timeout_sec"`
+	Enabled       bool     `yaml:"enabled"`
+	DefaultURL    string   `yaml:"default_url"`
+	TimeoutSec    int      `yaml:"timeout_sec"`
+	AllowedHosts  []string `yaml:"allowed_hosts"`
+	AllowHTTP     bool     `yaml:"allow_http"`
+	SigningSecret string   `yaml:"signing_secret"`
+	MaxConcurrent int      `yaml:"max_concurrent"`
+}
+
+// CallbackConfig 渠道回执签名校验。
+type CallbackConfig struct {
+	SignatureRequired bool   `yaml:"signature_required"`
+	SignatureSecret   string `yaml:"signature_secret"`
+	MaxSkewSec        int    `yaml:"max_skew_sec"`
 }
 
 // AudienceConfig 人群 Provider
@@ -273,16 +294,55 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
 	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
+	cfg.applyEnvOverrides()
 	cfg.applyDefaults()
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
 	return &cfg, nil
+}
+
+func (c *Config) applyEnvOverrides() {
+	override := func(name string, dst *string) {
+		if value, ok := os.LookupEnv(name); ok && value != "" {
+			*dst = value
+		}
+	}
+	override("STARLINK_SESSION_SECRET", &c.Auth.SessionSecret)
+	override("STARLINK_MYSQL_DSN", &c.MySQL.DSN)
+	override("STARLINK_REDIS_PASSWORD", &c.Redis.Password)
+	override("STARLINK_CALLBACK_SECRET", &c.Callback.SignatureSecret)
+	override("STARLINK_WEBHOOK_SIGNING_SECRET", &c.Webhook.SigningSecret)
+	override("STARLINK_ROCKETMQ_ACCESS_KEY", &c.MQ.RocketMQ.AccessKey)
+	override("STARLINK_ROCKETMQ_SECRET_KEY", &c.MQ.RocketMQ.SecretKey)
 }
 
 func (c *Config) applyDefaults() {
 	if c.Server.Addr == "" {
 		c.Server.Addr = ":8080"
+	}
+	if len(c.Server.AllowedOrigins) == 0 {
+		c.Server.AllowedOrigins = []string{"http://localhost:3000", "http://localhost:5173"}
+	}
+	if c.Server.MaxBodyBytes <= 0 {
+		c.Server.MaxBodyBytes = 2 << 20
+	}
+	if c.Server.ReadHeaderTimeoutSec <= 0 {
+		c.Server.ReadHeaderTimeoutSec = 5
+	}
+	if c.Server.ReadTimeoutSec <= 0 {
+		c.Server.ReadTimeoutSec = 15
+	}
+	if c.Server.WriteTimeoutSec <= 0 {
+		c.Server.WriteTimeoutSec = 30
+	}
+	if c.Server.IdleTimeoutSec <= 0 {
+		c.Server.IdleTimeoutSec = 60
 	}
 	if c.Log.Level == "" {
 		c.Log.Level = "info"
@@ -403,6 +463,12 @@ func (c *Config) applyDefaults() {
 	if c.Webhook.TimeoutSec <= 0 {
 		c.Webhook.TimeoutSec = 5
 	}
+	if c.Webhook.MaxConcurrent <= 0 {
+		c.Webhook.MaxConcurrent = 32
+	}
+	if c.Callback.MaxSkewSec <= 0 {
+		c.Callback.MaxSkewSec = 300
+	}
 	if c.Campaign.DefaultChannel == "" {
 		c.Campaign.DefaultChannel = "inbox"
 	}
@@ -501,4 +567,24 @@ func (c *Config) applyDefaults() {
 		}
 		c.ChannelQuota.Channels[name] = e
 	}
+}
+
+func (c *Config) validate() error {
+	mode := strings.ToLower(strings.TrimSpace(c.Server.Mode))
+	if mode != "" && mode != "debug" && mode != "release" && mode != "test" {
+		return fmt.Errorf("invalid server.mode %q", c.Server.Mode)
+	}
+	if c.Auth.Enabled && len(c.Auth.SessionSecret) < 32 {
+		return fmt.Errorf("auth.session_secret must be at least 32 bytes when auth is enabled")
+	}
+	if c.MySQL.DSN == "" {
+		return fmt.Errorf("mysql.dsn is required")
+	}
+	if c.Redis.Addr == "" {
+		return fmt.Errorf("redis.addr is required")
+	}
+	if c.Callback.SignatureRequired && len(c.Callback.SignatureSecret) < 32 {
+		return fmt.Errorf("callback.signature_secret must be at least 32 bytes when signatures are required")
+	}
+	return nil
 }

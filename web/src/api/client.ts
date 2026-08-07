@@ -55,7 +55,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (body.code !== 0) {
     throw new ApiError(body.code, body.message || 'request failed')
   }
-  return body.data as T
+  if (body.data === undefined || body.data === null) {
+    // 后端约定 code=0 必带 data。缺失时直接暴露契约问题，
+    // 否则 undefined 会被 as T 蒙混过关，最终在页面里抛 TypeError 显示成「加载失败」。
+    throw new ApiError(body.code, `接口返回缺少 data：${path}`)
+  }
+  return body.data
 }
 
 export const api = {
@@ -483,17 +488,8 @@ export const api = {
         enabled: boolean
         source: string
         permission_count: number
-        has_password_note?: boolean
       }>
     }>('/api/v1/rbac/users'),
-
-  getUserSecret: (username: string) =>
-    request<{
-      username: string
-      password_note: string
-      has_note: boolean
-      message?: string
-    }>(`/api/v1/rbac/users/${encodeURIComponent(username)}/secret`),
 
   resetUserPassword: (username: string, password: string) =>
     request<{ ok: boolean; username: string; persisted: boolean }>(

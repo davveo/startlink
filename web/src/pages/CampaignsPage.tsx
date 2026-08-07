@@ -68,6 +68,8 @@ export function CampaignsPage() {
     created_by: '',
     as_draft: false,
   })
+  // 自定义场景的可见性必须独立于取值：否则输入到与预设相同的值时输入框会突然消失
+  const [customScene, setCustomScene] = useState(false)
   const [preflightText, setPreflightText] = useState('')
   const [dryRunText, setDryRunText] = useState('')
   const [estimateText, setEstimateText] = useState('')
@@ -245,17 +247,15 @@ export function CampaignsPage() {
           >
             <Select
               required
-              value={
-                BIZ_SCENE_OPTIONS.some((o) => o.value === form.biz_scene)
-                  ? form.biz_scene
-                  : '__custom__'
-              }
+              value={customScene ? '__custom__' : form.biz_scene}
               onChange={(e) => {
                 const v = e.target.value
                 if (v === '__custom__') {
+                  setCustomScene(true)
                   setForm({ ...form, biz_scene: '' })
                   return
                 }
+                setCustomScene(false)
                 setForm({ ...form, biz_scene: v })
               }}
             >
@@ -266,7 +266,7 @@ export function CampaignsPage() {
               ))}
               <option value="__custom__">自定义…</option>
             </Select>
-            {!BIZ_SCENE_OPTIONS.some((o) => o.value === form.biz_scene) ? (
+            {customScene ? (
               <Input
                 className="mt-2"
                 required

@@ -19,6 +19,7 @@ import {
   Th,
   Toast,
 } from '../components/ui'
+import { useRequestSeq } from '../lib/async'
 
 function pct(rate: number) {
   if (!Number.isFinite(rate)) return '-'
@@ -28,17 +29,27 @@ function pct(rate: number) {
 export function OpsPage() {
   const { id: idParam } = useParams()
   const [search] = useSearchParams()
-  const initialId = idParam || search.get('task') || ''
-  const [taskId, setTaskId] = useState(initialId)
+  const routeId = idParam || search.get('task') || ''
+  // 输入态与已提交态分开：自由文本每敲一个字符都会变，只有提交值才触发加载
+  const [taskInput, setTaskInput] = useState(routeId)
+  const [taskId, setTaskId] = useState(routeId)
   const [funnel, setFunnel] = useState<FunnelView | null>(null)
   const [failures, setFailures] = useState<FailureAgg[]>([])
   const [experiment, setExperiment] = useState<ExperimentMetrics | null>(null)
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
+  const seq = useRequestSeq()
+
+  // /ops/5 与 /ops/7 命中同一路由不会重建组件，前进后退时需手动同步
+  useEffect(() => {
+    setTaskInput(routeId)
+    setTaskId(routeId)
+  }, [routeId])
 
   const load = useCallback(async () => {
     const id = Number(taskId)
     if (!Number.isFinite(id) || id <= 0) return
+    const s = seq.next()
     setBusy(true)
     setErr('')
     try {
@@ -47,19 +58,28 @@ export function OpsPage() {
         api.getFailures(id),
         api.getExperimentMetrics(id),
       ])
+      if (!seq.isLatest(s)) return
       setFunnel(f)
       setFailures(fail.items ?? [])
       setExperiment(exp)
     } catch (e) {
+      if (!seq.isLatest(s)) return
       setErr(e instanceof ApiError ? e.message : '加载失败')
     } finally {
-      setBusy(false)
+      if (seq.isLatest(s)) setBusy(false)
     }
-  }, [taskId])
+  }, [taskId, seq])
 
   useEffect(() => {
     if (Number(taskId) > 0) void load()
   }, [load, taskId])
+
+  function submitTask() {
+    const next = taskInput.trim()
+    // 任务号没变时按钮语义退化为刷新
+    if (next === taskId) void load()
+    else setTaskId(next)
+  }
 
   const p = funnel?.pipeline
   const taskNum = Number(taskId)
@@ -88,10 +108,17 @@ export function OpsPage() {
       <Panel>
         <div className="flex flex-wrap items-end gap-3">
           <Field label="主任务 ID" noMargin className="min-w-[12rem] flex-[1_1_16rem]">
-            <Input value={taskId} onChange={(e) => setTaskId(e.target.value)} placeholder="task id" />
+            <Input
+              value={taskInput}
+              onChange={(e) => setTaskInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') submitTask()
+              }}
+              placeholder="task id"
+            />
           </Field>
           <BtnRow className="shrink-0">
-            <Button variant="ink" type="button" disabled={busy} onClick={() => void load()}>
+            <Button variant="ink" type="button" disabled={busy} onClick={submitTask}>
               加载分析
             </Button>
             {taskNum > 0 ? (
@@ -101,7 +128,7 @@ export function OpsPage() {
             ) : null}
           </BtnRow>
         </div>
-        <p className="mt-1.5 text-xs text-muted">从任务列表点「分析」会自动带入。</p>
+        <p className="mt-1.5 text-xs text-muted">从任务列表点「分析」会自动带入；回车或点「加载分析」提交。</p>
       </Panel>
 
       {funnel ? (

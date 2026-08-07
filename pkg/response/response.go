@@ -25,6 +25,8 @@ func Fail(c *gin.Context, err error) {
 			status = http.StatusUnauthorized
 		case e.Code == 40301:
 			status = http.StatusForbidden
+		case e.Code == 40401 || e.Code == 40402:
+			status = http.StatusNotFound
 		case e.Code == 40901 || e.Code == 40902 || e.Code == 40903:
 			status = http.StatusConflict
 		case e.Code == 42901:
@@ -37,5 +39,6 @@ func Fail(c *gin.Context, err error) {
 		c.JSON(status, Body{Code: e.Code, Message: e.Message})
 		return
 	}
-	c.JSON(http.StatusInternalServerError, Body{Code: errcode.Internal.Code, Message: err.Error()})
+	c.Error(err) // 详细错误仅保留在服务端上下文，避免泄漏 SQL/网络等内部信息。
+	c.JSON(http.StatusInternalServerError, Body{Code: errcode.Internal.Code, Message: errcode.Internal.Message})
 }

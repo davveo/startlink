@@ -138,7 +138,9 @@ export function TemplateFormPage() {
     try {
       const contents = compactContents(form.contents)
       const var_schema = parseVarSchema(form.var_schema_text)
-      if (isEdit && editing) {
+      if (isEdit) {
+        // 编辑态下模板未加载完成时必须报错，不能悄悄走到创建分支新建一份
+        if (!editing) throw new Error('模板尚未加载完成，请稍候重试')
         await api.updateTemplate(editing.id, {
           name: form.name,
           body: form.body,

@@ -2,8 +2,11 @@ package redisx
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/starlink/push/internal/config"
 	"github.com/starlink/push/internal/domain"
 )
@@ -92,6 +95,48 @@ func TestChannelQuotaLegacyDisabled(t *testing.T) {
 	err := l.Wait(ctx, domain.ChannelSMS, domain.PriorityNormal)
 	if err != domain.ErrChannelThrottled {
 		t.Fatalf("expected throttle, got %v", err)
+	}
+}
+
+// Redis 不可用时无限放行会让多实例全速打供应商，必须降级到进程内保守桶
+func TestChannelQuotaDegradesToLocalBucketWhenRedisDown(t *testing.T) {
+	cfg := config.ChannelQuotaConfig{
+		Enabled:       true,
+		Distributed:   true,
+		WaitTimeoutMs: 120,
+		GlobalQPS:     0,
+		Channels: map[string]config.ChannelQuotaEntry{
+			"sms": {QPS: 2, Burst: 2, HighReserveRatio: 0},
+		},
+	}
+	cfg.RedisKeyPrefix = "starlink:quota:degrade:"
+	rdb := redis.NewClient(&redis.Options{
+		Addr:        "127.0.0.1:1", // 必然连不上
+		DialTimeout: 30 * time.Millisecond,
+		MaxRetries:  -1,
+	})
+	defer rdb.Close()
+	l := NewChannelQuotaLimiter(rdb, cfg, 500).(*ChannelQuotaLimiter)
+
+	ctx := context.Background()
+	throttled := false
+	for i := 0; i < 6; i++ {
+		if errors.Is(l.Wait(ctx, domain.ChannelSMS, domain.PriorityNormal), domain.ErrChannelThrottled) {
+			throttled = true
+			break
+		}
+	}
+	if !throttled {
+		t.Fatal("redis outage must not fail-open unconditionally")
+	}
+}
+
+func TestDegradedRate(t *testing.T) {
+	if got := degraded(100); got != 50 {
+		t.Fatalf("degraded(100)=%v", got)
+	}
+	if got := degraded(1); got != 1 {
+		t.Fatalf("degraded must keep a floor of 1, got %v", got)
 	}
 }
 

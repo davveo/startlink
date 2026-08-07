@@ -4,11 +4,21 @@ import { ApiError } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import { Button, Field, Input, Toast } from '../components/ui'
 
+/**
+ * next 只接受站内绝对路径。`//evil.com` 与 `/\evil.com` 会被浏览器当成协议相对 URL，
+ * 既是开放重定向，也会让 router 的 replaceState 跨源抛 SecurityError 白屏。
+ */
+function safeNext(raw: string | null): string {
+  if (!raw || !raw.startsWith('/')) return '/'
+  if (raw.startsWith('//') || raw.startsWith('/\\')) return '/'
+  return raw
+}
+
 export function LoginPage() {
   const { user, loading, login } = useAuth()
   const navigate = useNavigate()
   const [params] = useSearchParams()
-  const next = params.get('next') || '/'
+  const next = safeNext(params.get('next'))
 
   const [username, setUsername] = useState('admin')
   const [password, setPassword] = useState('')
@@ -16,7 +26,7 @@ export function LoginPage() {
   const [error, setError] = useState('')
 
   if (!loading && user) {
-    return <Navigate to={next.startsWith('/') ? next : '/'} replace />
+    return <Navigate to={next} replace />
   }
 
   async function onSubmit(e: FormEvent) {
@@ -25,7 +35,7 @@ export function LoginPage() {
     setError('')
     try {
       await login(username.trim(), password)
-      navigate(next.startsWith('/') ? next : '/', { replace: true })
+      navigate(next, { replace: true })
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '登录失败')
     } finally {

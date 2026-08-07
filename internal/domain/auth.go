@@ -2,17 +2,19 @@ package domain
 
 import "time"
 
-// AuthUser 运营台账号（密码存 bcrypt hash；password_note 为可查看的初始/重置副本）
+// AuthUser 运营台账号。密码只保存 bcrypt hash；PasswordNote 仅用于兼容旧表，
+// 启动迁移会清空历史值，业务代码不得再写入或读取该字段。
 type AuthUser struct {
-	ID           uint64    `gorm:"primaryKey;autoIncrement" json:"id"`
-	Username     string    `gorm:"size:64;uniqueIndex;not null" json:"username"`
-	PasswordHash string    `gorm:"size:255;not null" json:"-"`
-	PasswordNote string    `gorm:"size:128" json:"-"` // 仅管理员经专用接口可读；列表不返回
-	DisplayName  string    `gorm:"size:128" json:"display_name,omitempty"`
-	Role         string    `gorm:"size:64;index;not null" json:"role"` // auth_roles.code
-	Enabled      bool      `gorm:"not null;default:true;index" json:"enabled"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID             uint64    `gorm:"primaryKey;autoIncrement" json:"id"`
+	Username       string    `gorm:"size:64;uniqueIndex;not null" json:"username"`
+	PasswordHash   string    `gorm:"size:255;not null" json:"-"`
+	PasswordNote   string    `gorm:"size:128" json:"-"`
+	SessionVersion uint64    `gorm:"not null;default:1" json:"-"`
+	DisplayName    string    `gorm:"size:128" json:"display_name,omitempty"`
+	Role           string    `gorm:"size:64;index;not null" json:"role"` // auth_roles.code
+	Enabled        bool      `gorm:"not null;default:true;index" json:"enabled"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 func (AuthUser) TableName() string { return "auth_users" }

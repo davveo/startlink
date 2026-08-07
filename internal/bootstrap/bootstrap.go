@@ -98,7 +98,7 @@ func NewInfra(cfgPath string) (*Infra, error) {
 	audReg.RegisterFilter(audience.NewUnsubscribeFilter(rdb.RDB(), cfg.Compliance.UnsubscribeKeyPrefix))
 	audReg.RegisterFilter(audience.NewABSampleFilter())
 
-	wh := webhook.New(cfg.Webhook.DefaultURL, cfg.Webhook.TimeoutSec, cfg.Webhook.Enabled)
+	wh := webhook.New(cfg.Webhook)
 
 	limiter := redisx.NewChannelQuotaLimiter(rdb.RDB(), cfg.ChannelQuota, cfg.Pusher.RateLimitQPS)
 	if cfg.ChannelQuota.Enabled {

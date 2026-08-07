@@ -61,6 +61,10 @@ func (s *Splitter) Split(ctx context.Context, main *domain.MainTask, owner strin
 	if main.Status == domain.TaskStatusCancelled {
 		return fmt.Errorf("main task %d cancelled", main.ID)
 	}
+	// 过期活动圈人/建子任务/入队全是无效写入，入口直接短路
+	if isExpired(main) {
+		return fmt.Errorf("%w: main task %d expired at %s", domain.ErrCampaignExpired, main.ID, main.ExpireAt.Format(time.RFC3339))
+	}
 
 	var extra map[string]any
 	if main.AudienceExtra != "" {
@@ -235,8 +239,14 @@ func (s *Splitter) Split(ctx context.Context, main *domain.MainTask, owner strin
 				TotalCount: len(ids),
 				Status:     domain.TaskStatusPending,
 			}}
-			if err := s.tasks.CreateSubTasks(ctx, batch); err != nil {
+			// 页首的续租在慢分页后可能已失效：写入与租约校验必须同事务，
+			// 否则被抢租约的实例仍会插入已作废的分片，留下永久 pending 的孤儿。
+			ok, err := s.tasks.CreateSubTasksWithLease(ctx, main.ID, owner, batch)
+			if err != nil {
 				return err
+			}
+			if !ok {
+				return fmt.Errorf("lost split lease for main_task=%d before shard %d", main.ID, shard)
 			}
 			wroteAny = true
 			total += int64(len(ids))
@@ -278,17 +288,9 @@ func (s *Splitter) Split(ctx context.Context, main *domain.MainTask, owner strin
 	now := time.Now()
 	main.StartedAt = &now
 
-	ok, err := s.tasks.UpdateMainTaskStats(ctx, main.ID, main.Version, 0, 0, 0, domain.TaskStatusRunning)
-	if err != nil {
+	// 非终态状态不做 CAS，恒返回 true，故无需处理版本冲突分支
+	if _, err := s.tasks.UpdateMainTaskStats(ctx, main.ID, main.Version, 0, 0, 0, domain.TaskStatusRunning); err != nil {
 		return err
-	}
-	if !ok {
-		cur, _ = s.tasks.GetMainTask(ctx, main.ID)
-		if cur != nil && cur.Status == domain.TaskStatusCancelled {
-			_, _ = s.tasks.CancelUnfinishedSubTasks(ctx, main.ID)
-			return fmt.Errorf("main task %d cancelled", main.ID)
-		}
-		slog.Warn("main task version conflict after split", "id", main.ID)
 	}
 	// 收尾写入完整 meta；随后 ClearSplitLease，Claim 才放开
 	if err := s.tasks.PatchMainMeta(ctx, main.ID, total, shard); err != nil {
@@ -354,12 +356,13 @@ func (s *Splitter) checkOverCapacity(ctx context.Context, main *domain.MainTask,
 			"action", action,
 			"stage", "split_over_capacity",
 		)
-		if action == "pause" {
-			if ok, err := s.tasks.PauseMainTask(ctx, main.ID); err != nil {
-				slog.Warn("auto-pause after over capacity failed", "id", main.ID, "err", err)
-			} else if ok {
-				slog.Info("main task paused due to channel quota", "id", main.ID, "channel", ch)
-			}
+		if action != "pause" {
+			continue // warn 模式下继续检查其余渠道
+		}
+		if ok, err := s.tasks.PauseMainTask(ctx, main.ID); err != nil {
+			slog.Warn("auto-pause after over capacity failed", "id", main.ID, "err", err)
+		} else if ok {
+			slog.Info("main task paused due to channel quota", "id", main.ID, "channel", ch)
 		}
 		return
 	}

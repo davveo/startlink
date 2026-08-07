@@ -24,12 +24,20 @@ type RedisStreamOptions struct {
 	MaxDelivery  int64
 	DLQSuffix    string
 
+	// DeferredMaxAge deferred（暂停/时窗/免打扰/限流…）消息的兜底上限。
+	// 这类消息不计投递次数，只按「消息在 Stream 中的总滞留时长」判死信，
+	// 避免真正无解的消息永久占用 PEL。0=永不兜底。
+	DeferredMaxAge time.Duration
+
 	MaxLen       int64         // 主队列上限；0=不限制
 	DLQMaxLen    int64         // 死信上限；0=不限制
 	MaxLenApprox bool          // MAXLEN ~
 	TrimInterval time.Duration // 0=不定期 XTRIM
 	AckXDel      bool          // ACK 后 XDEL
 }
+
+// defaultDeferredMaxAge deferred 消息最长滞留时间
+const defaultDeferredMaxAge = 24 * time.Hour
 
 // OptionsFromConfig 将 yaml 配置转为驱动选项
 func OptionsFromConfig(c config.RedisStreamMQConfig) RedisStreamOptions {
@@ -86,6 +94,12 @@ func normalizeOptions(o RedisStreamOptions) RedisStreamOptions {
 	if o.DLQSuffix == "" {
 		o.DLQSuffix = ":dlq"
 	}
+	if o.DeferredMaxAge == 0 {
+		o.DeferredMaxAge = defaultDeferredMaxAge
+	}
+	if o.DeferredMaxAge < 0 {
+		o.DeferredMaxAge = 0
+	}
 	return o
 }
 
@@ -113,7 +127,39 @@ func isDeferredRequeue(err error) bool {
 		errors.Is(err, domain.ErrOutsideSendWindow) ||
 		errors.Is(err, domain.ErrQuietHours) ||
 		errors.Is(err, domain.ErrChannelThrottled) ||
+		errors.Is(err, domain.ErrFrequencyUnavailable) ||
+		errors.Is(err, domain.ErrUnsubscribeUnavailable) ||
 		errors.Is(err, domain.ErrMainStatusUnavailable)
+}
+
+// ShouldDeadLetterDeferred deferred 消息的兜底判死信：仅按总滞留时长。
+func ShouldDeadLetterDeferred(age, maxAge time.Duration) bool {
+	if maxAge <= 0 || age <= 0 {
+		return false
+	}
+	return age >= maxAge
+}
+
+// deferredDeadLetter 无法解析条目 ID 时保守地留在 PEL
+func deferredDeadLetter(id string, now time.Time, maxAge time.Duration) bool {
+	age, ok := streamEntryAge(id, now)
+	if !ok {
+		return false
+	}
+	return ShouldDeadLetterDeferred(age, maxAge)
+}
+
+// streamEntryAge 从 Redis Stream 条目 ID（<毫秒时间戳>-<序号>）推算消息滞留时长。
+func streamEntryAge(id string, now time.Time) (time.Duration, bool) {
+	sepIdx := strings.IndexByte(id, '-')
+	if sepIdx <= 0 {
+		return 0, false
+	}
+	ms, err := strconv.ParseInt(id[:sepIdx], 10, 64)
+	if err != nil || ms <= 0 {
+		return 0, false
+	}
+	return now.Sub(time.UnixMilli(ms)), true
 }
 
 // RedisStream 基于 Redis Stream 的 MQ：Consumer Group + PEL 重投 + DLQ + 容量治理
@@ -323,18 +369,10 @@ func (q *RedisStream) reclaimOnce(
 		slog.Warn("mq autoclaim failed", "stream", q.stream, "group", q.group, "err", err)
 		return true
 	}
+	// 认领阶段拿不到失败原因，不能仅凭投递次数判死信，
+	// 否则暂停/时窗/免打扰等 deferred 消息会被静默丢进 DLQ。
+	// 一律交回 handler，由 onHandlerFailure 用真实错误裁决。
 	for _, xmsg := range msgs {
-		count, _ := q.deliveryCount(ctx, xmsg.ID)
-		if ShouldDeadLetter(count, q.opts.MaxDelivery, nil) {
-			payload, _ := xmsg.Values["payload"].(string)
-			if err := q.moveToDLQ(ctx, consumerID, xmsg.ID, payload, count, fmt.Errorf("max delivery reached before retry")); err != nil {
-				slog.Error("mq dlq write failed", "id", xmsg.ID, "err", err)
-				continue
-			}
-			q.ack(ctx, xmsg.ID)
-			slog.Warn("mq moved to dlq", "stream", q.stream, "id", xmsg.ID, "delivery", count, "dlq", q.dlqStream())
-			continue
-		}
 		if !dispatch(xmsg) {
 			return false
 		}
@@ -364,7 +402,18 @@ func (q *RedisStream) handleMessage(ctx context.Context, consumerID string, xmsg
 
 func (q *RedisStream) onHandlerFailure(ctx context.Context, consumerID, id, payload string, handlerErr error) {
 	if isDeferredRequeue(handlerErr) {
-		slog.Info("mq defer reclaim", "stream", q.stream, "id", id, "err", handlerErr)
+		if !deferredDeadLetter(id, time.Now(), q.opts.DeferredMaxAge) {
+			slog.Info("mq defer reclaim", "stream", q.stream, "id", id, "err", handlerErr)
+			return
+		}
+		count, _ := q.deliveryCount(ctx, id)
+		if err := q.moveToDLQ(ctx, consumerID, id, payload, count, handlerErr); err != nil {
+			slog.Error("mq dlq write failed, leave pending", "id", id, "err", err)
+			return
+		}
+		q.ack(ctx, id)
+		slog.Warn("mq deferred message exceeded max age, moved to dlq",
+			"stream", q.stream, "id", id, "max_age", q.opts.DeferredMaxAge, "err", handlerErr)
 		return
 	}
 

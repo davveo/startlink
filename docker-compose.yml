@@ -1,3 +1,8 @@
+x-app-secrets: &app-secrets
+  STARLINK_SESSION_SECRET: ${STARLINK_SESSION_SECRET:-dev-only-starlink-session-secret-change-me-2026}
+  STARLINK_CALLBACK_SECRET: ${STARLINK_CALLBACK_SECRET:-dev-only-starlink-callback-secret-change-me-2026}
+  STARLINK_WEBHOOK_SIGNING_SECRET: ${STARLINK_WEBHOOK_SIGNING_SECRET:-dev-only-starlink-webhook-secret-change-me-2026}
+
 services:
   mysql:
     image: mysql:8.0
@@ -45,6 +50,7 @@ services:
     container_name: starlink-api
     restart: unless-stopped
     environment:
+      <<: *app-secrets
       APP: api
       CONFIG: /app/configs/config.yaml
       TZ: Asia/Shanghai
@@ -56,7 +62,7 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/readyz"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -67,6 +73,7 @@ services:
     container_name: starlink-scheduler
     restart: unless-stopped
     environment:
+      <<: *app-secrets
       APP: scheduler
       CONFIG: /app/configs/config.yaml
       TZ: Asia/Shanghai
@@ -83,6 +90,7 @@ services:
     container_name: starlink-pusher
     restart: unless-stopped
     environment:
+      <<: *app-secrets
       APP: pusher
       CONFIG: /app/configs/config.yaml
       TZ: Asia/Shanghai

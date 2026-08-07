@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useRef,
   type ButtonHTMLAttributes,
   type InputHTMLAttributes,
   type ReactNode,
@@ -251,10 +252,16 @@ export function Modal({
   /** 较宽面板（权限勾选等） */
   wide?: boolean
 }) {
+  // onClose 多为内联箭头函数，直接进依赖会导致父组件每次重渲染都拆装监听并改写 body.overflow
+  const onCloseRef = useRef(onClose)
+  useEffect(() => {
+    onCloseRef.current = onClose
+  })
+
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape') onCloseRef.current()
     }
     document.addEventListener('keydown', onKey)
     const prev = document.body.style.overflow
@@ -263,7 +270,7 @@ export function Modal({
       document.removeEventListener('keydown', onKey)
       document.body.style.overflow = prev
     }
-  }, [open, onClose])
+  }, [open])
 
   if (!open) return null
 

@@ -2,6 +2,8 @@ package mq
 
 import (
 	"errors"
+	"fmt"
+	"strconv"
 	"testing"
 	"time"
 
@@ -50,6 +52,71 @@ func TestNormalizeOptions(t *testing.T) {
 	o := normalizeOptions(RedisStreamOptions{})
 	if o.ClaimMinIdle <= 0 || o.ClaimBatch <= 0 || o.MaxDelivery <= 0 || o.DLQSuffix == "" {
 		t.Fatalf("defaults not applied: %+v", o)
+	}
+	if o.DeferredMaxAge != defaultDeferredMaxAge {
+		t.Fatalf("deferred max age default: %v", o.DeferredMaxAge)
+	}
+	if got := normalizeOptions(RedisStreamOptions{DeferredMaxAge: -1}); got.DeferredMaxAge != 0 {
+		t.Fatalf("negative should disable deferred dlq: %v", got.DeferredMaxAge)
+	}
+}
+
+// 退订不可判定与频控不可判定同为 fail-closed，必须一起豁免死信，
+// 否则 Redis 抖动期间的营销消息会被直接丢弃。
+func TestIsDeferredRequeueCoversUnavailableSentinels(t *testing.T) {
+	for _, err := range []error{
+		domain.ErrFrequencyUnavailable,
+		domain.ErrUnsubscribeUnavailable,
+		domain.ErrMainStatusUnavailable,
+		domain.ErrMainTaskPaused,
+		domain.ErrOutsideSendWindow,
+		domain.ErrQuietHours,
+		domain.ErrChannelThrottled,
+	} {
+		if !isDeferredRequeue(fmt.Errorf("wrapped: %w", err)) {
+			t.Fatalf("%v should be deferred", err)
+		}
+		if ShouldDeadLetter(999, 5, err) {
+			t.Fatalf("%v must never dead-letter by count", err)
+		}
+	}
+	if isDeferredRequeue(errors.New("boom")) {
+		t.Fatal("plain error must not be deferred")
+	}
+}
+
+func TestStreamEntryAge(t *testing.T) {
+	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	age, ok := streamEntryAge(strconv.FormatInt(now.Add(-90*time.Minute).UnixMilli(), 10)+"-0", now)
+	if !ok || age != 90*time.Minute {
+		t.Fatalf("age=%v ok=%v", age, ok)
+	}
+	if _, ok := streamEntryAge("not-an-id", now); ok {
+		t.Fatal("unparsable id should report ok=false")
+	}
+	if _, ok := streamEntryAge("", now); ok {
+		t.Fatal("empty id should report ok=false")
+	}
+}
+
+// deferred 消息只按总滞留时长兜底，不按投递次数：
+// 30s 重认领一次、max_delivery=5 时不能在 2.5 分钟后就被判死。
+func TestDeferredDeadLetterUsesAgeNotDeliveryCount(t *testing.T) {
+	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	id := func(d time.Duration) string {
+		return strconv.FormatInt(now.Add(-d).UnixMilli(), 10) + "-3"
+	}
+	if deferredDeadLetter(id(3*time.Minute), now, defaultDeferredMaxAge) {
+		t.Fatal("3min old deferred message must stay pending")
+	}
+	if !deferredDeadLetter(id(25*time.Hour), now, defaultDeferredMaxAge) {
+		t.Fatal("25h old deferred message should dead-letter")
+	}
+	if deferredDeadLetter(id(25*time.Hour), now, 0) {
+		t.Fatal("max age 0 disables deferred dead-letter")
+	}
+	if deferredDeadLetter("garbage", now, defaultDeferredMaxAge) {
+		t.Fatal("unparsable id must stay pending")
 	}
 }
 

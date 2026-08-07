@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"github.com/starlink/push/internal/auth"
 	"github.com/starlink/push/internal/domain"
 	"github.com/starlink/push/pkg/errcode"
 	"github.com/starlink/push/pkg/response"
@@ -209,7 +210,7 @@ func (h *CampaignHandler) ExportAsync(c *gin.Context) {
 		CreatedBy string `json:"created_by"`
 	}
 	_ = c.ShouldBindJSON(&body)
-	job, err := h.svc.CreateExport(c.Request.Context(), id, body.Kind, body.CreatedBy)
+	job, err := h.svc.CreateExport(c.Request.Context(), id, body.Kind, auth.UsernameFromContext(c))
 	if err != nil {
 		response.Fail(c, err)
 		return

@@ -1,6 +1,12 @@
 server:
   addr: ":8080"
   mode: debug # debug | release
+  allowed_origins: ["http://localhost:3000", "http://localhost:5173"]
+  max_body_bytes: 2097152
+  read_header_timeout_sec: 5
+  read_timeout_sec: 15
+  write_timeout_sec: 30
+  idle_timeout_sec: 60
 
 log:
   level: info   # debug | info | warn | error
@@ -11,18 +17,19 @@ log:
 # enabled=false 时跳过鉴权（单测/紧急排障）；生产务必改密并更换 session_secret
 auth:
   enabled: true
-  session_secret: "change-me-in-production"
+  session_secret: "dev-only-starlink-session-secret-change-me-2026"
   cookie_name: starlink_session
+  cookie_secure: false
   ttl_hours: 24
   users:
     - username: admin
-      password: admin123
+      password: admin12345
       role: admin
     - username: operator
-      password: operator123
+      password: operator12345
       role: operator
     - username: viewer
-      password: viewer123
+      password: viewer12345
       role: viewer
 
 mysql:
@@ -186,3 +193,13 @@ webhook:
   enabled: true
   default_url: ""          # 全局默认；创建活动时可传 webhook_url 覆盖
   timeout_sec: 5
+  allowed_hosts: ["localhost", "127.0.0.1"]
+  allow_http: true
+  signing_secret: ""
+  max_concurrent: 32
+
+# 渠道回执签名；生产环境应开启。签名原文：timestamp + "\n" + nonce + "\n" + 原始 JSON body。
+callback:
+  signature_required: false
+  signature_secret: ""
+  max_skew_sec: 300

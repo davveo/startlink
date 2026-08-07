@@ -62,20 +62,43 @@ func main() {
 		os.Exit(1)
 	}
 	sessions := auth.NewManager(infra.Cfg.Auth, infra.AuthUsers)
+	sqlDB, err := infra.DB.DB()
+	if err != nil {
+		slog.Error("get sql db failed", "err", err)
+		os.Exit(1)
+	}
+	mqReady := func(ctx context.Context) error {
+		if infra.MQ.Driver() == "redis_stream" || infra.MQ.Driver() == "memory" {
+			return nil // Redis 已由独立检查覆盖；memory 无外部依赖。
+		}
+		return infra.MQ.EnsureReady(ctx)
+	}
 
-	engine := server.New(infra.Cfg.Server.Mode, server.Deps{
+	engine := server.New(infra.Cfg.Server, server.Deps{
 		Auth:         handler.NewAuthHandler(sessions),
 		RBAC:         handler.NewRBACHandler(sessions),
 		Sessions:     sessions,
 		Campaign:     handler.NewCampaignHandler(campaignSvc, infra.Channels),
-		Callback:     handler.NewCallbackHandler(callbackSvc),
+		Callback:     handler.NewCallbackHandler(callbackSvc, callback.NewVerifier(infra.Cfg.Callback, infra.Redis.RDB())),
 		Template:     handler.NewTemplateHandler(templateSvc),
 		Notification: handler.NewNotificationHandler(notifySvc),
 		Audit:        handler.NewAuditHandler(auditSvc),
 		AuditRepo:    infra.AuditLogs,
+		Ready: handler.Readiness(
+			sqlDB.PingContext,
+			infra.Redis.Ping,
+			mqReady,
+		),
 	})
 
-	srv := &http.Server{Addr: infra.Cfg.Server.Addr, Handler: engine}
+	srv := &http.Server{
+		Addr:              infra.Cfg.Server.Addr,
+		Handler:           engine,
+		ReadHeaderTimeout: time.Duration(infra.Cfg.Server.ReadHeaderTimeoutSec) * time.Second,
+		ReadTimeout:       time.Duration(infra.Cfg.Server.ReadTimeoutSec) * time.Second,
+		WriteTimeout:      time.Duration(infra.Cfg.Server.WriteTimeoutSec) * time.Second,
+		IdleTimeout:       time.Duration(infra.Cfg.Server.IdleTimeoutSec) * time.Second,
+	}
 	go func() {
 		slog.Info("api server listening", "addr", infra.Cfg.Server.Addr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {

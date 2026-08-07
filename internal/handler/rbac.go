@@ -22,7 +22,7 @@ func NewRBACHandler(sessions *auth.Manager) *RBACHandler {
 func (h *RBACHandler) persistNote() gin.H {
 	return gin.H{
 		"mode": "mysql",
-		"note": "用户/角色/权限存 MySQL。密码 bcrypt 哈希；可查看副本存 password_note（仅专用接口）。YAML 仅库空 seed。",
+		"note": "用户/角色/权限存 MySQL。密码只保存 bcrypt 哈希；YAML 仅用于库空 seed。",
 	}
 }
 
@@ -250,24 +250,4 @@ func (h *RBACHandler) ResetPassword(c *gin.Context) {
 		return
 	}
 	response.OK(c, gin.H{"ok": true, "username": username, "persisted": true})
-}
-
-// GetUserSecret GET /api/v1/rbac/users/:username/secret
-func (h *RBACHandler) GetUserSecret(c *gin.Context) {
-	username := strings.TrimSpace(c.Param("username"))
-	note, has, err := h.sessions.GetPasswordSecret(username)
-	if err != nil {
-		response.Fail(c, err)
-		return
-	}
-	msg := ""
-	if !has {
-		msg = "无可查看副本（可能从未记录初始密码）。请使用「重置密码」并填写新密码后即可查看。"
-	}
-	response.OK(c, gin.H{
-		"username":      username,
-		"password_note": note,
-		"has_note":      has,
-		"message":       msg,
-	})
 }

@@ -32,6 +32,11 @@ func AuditMiddleware(repo port.AuditLogRepository) gin.HandlerFunc {
 			c.Next()
 			return
 		}
+		// 渠道回执是机器流量，量级与发送量同级，记审计会撑爆表并按请求打满 goroutine。
+		if strings.HasPrefix(path, "/api/v1/callbacks/") {
+			c.Next()
+			return
+		}
 
 		start := time.Now()
 		c.Next()
@@ -153,8 +158,6 @@ func inferAuditAction(method, fullPath, rawPath string) (action, resType, resID 
 		return "rbac.perm_create", "rbac", ""
 	case method == "PUT" && strings.HasPrefix(p, "/api/v1/rbac/permissions/:code"):
 		return "rbac.perm_update", "rbac", paramID(rawPath, "/api/v1/rbac/permissions/")
-	case p == "/api/v1/callbacks/receipt":
-		return "callback.receipt", "callback", ""
 	default:
 		return strings.ToLower(method) + " " + p, "", ""
 	}

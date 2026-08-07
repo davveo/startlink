@@ -57,7 +57,7 @@ func AutoMigrate(db *gorm.DB) error {
 
 	if db.Migrator().HasTable(&domain.PushRecord{}) {
 		// 建唯一索引前清理历史重复流水，保留同维度最新一条
-		_ = db.Exec(`
+		if err := db.Exec(`
 DELETE pr FROM push_records pr
 INNER JOIN (
   SELECT main_task_id, user_id, channel, MAX(id) AS keep_id
@@ -68,15 +68,23 @@ INNER JOIN (
    AND pr.user_id = d.user_id
    AND pr.channel = d.channel
    AND pr.id <> d.keep_id
-`).Error
+`).Error; err != nil {
+			return fmt.Errorf("deduplicate push records: %w", err)
+		}
 
 		if !db.Migrator().HasColumn(&domain.PushRecord{}, "Provider") {
-			_ = db.Migrator().AddColumn(&domain.PushRecord{}, "Provider")
+			if err := db.Migrator().AddColumn(&domain.PushRecord{}, "Provider"); err != nil {
+				return fmt.Errorf("add push_records.provider: %w", err)
+			}
 		}
-		_ = db.Exec(`UPDATE push_records SET provider_id = NULL WHERE provider_id = ''`).Error
-		_ = db.Exec(`UPDATE push_records SET provider = channel WHERE (provider IS NULL OR provider = '') AND channel IS NOT NULL AND channel <> ''`).Error
+		if err := db.Exec(`UPDATE push_records SET provider_id = NULL WHERE provider_id = ''`).Error; err != nil {
+			return fmt.Errorf("normalize empty provider ids: %w", err)
+		}
+		if err := db.Exec(`UPDATE push_records SET provider = channel WHERE (provider IS NULL OR provider = '') AND channel IS NOT NULL AND channel <> ''`).Error; err != nil {
+			return fmt.Errorf("backfill push record providers: %w", err)
+		}
 
-		_ = db.Exec(`
+		if err := db.Exec(`
 DELETE pr FROM push_records pr
 INNER JOIN (
   SELECT provider, channel, provider_id, MAX(id) AS keep_id
@@ -88,11 +96,13 @@ INNER JOIN (
    AND pr.channel = d.channel
    AND pr.provider_id = d.provider_id
    AND pr.id <> d.keep_id
-`).Error
+`).Error; err != nil {
+			return fmt.Errorf("deduplicate provider references: %w", err)
+		}
 	}
 
 	if db.Migrator().HasTable(&domain.PushReceipt{}) {
-		_ = db.Exec(`
+		if err := db.Exec(`
 DELETE pr FROM push_receipts pr
 INNER JOIN (
   SELECT push_record_id, event, MAX(id) AS keep_id
@@ -102,10 +112,12 @@ INNER JOIN (
 ) d ON pr.push_record_id = d.push_record_id
    AND pr.event = d.event
    AND pr.id <> d.keep_id
-`).Error
+`).Error; err != nil {
+			return fmt.Errorf("deduplicate push receipts: %w", err)
+		}
 	}
 
-	return db.AutoMigrate(
+	if err := db.AutoMigrate(
 		&domain.MainTask{},
 		&domain.SubTask{},
 		&domain.PushRecord{},
@@ -120,7 +132,17 @@ INNER JOIN (
 		&domain.AuthRole{},
 		&domain.AuthRolePermission{},
 		&domain.AuthPermission{},
-	)
+	); err != nil {
+		return err
+	}
+	// 旧版本曾保存管理员可读取的密码明文副本。滚动升级时立即清空；
+	// 暂时保留列只是为了兼容已有数据库结构。
+	if err := db.Model(&domain.AuthUser{}).
+		Where("password_note <> ''").
+		Update("password_note", "").Error; err != nil {
+		return fmt.Errorf("scrub legacy password notes: %w", err)
+	}
+	return nil
 }
 
 func NewTaskRepo(db *gorm.DB) *TaskRepo {
@@ -465,6 +487,55 @@ func (r *TaskRepo) CreateSubTasks(ctx context.Context, tasks []domain.SubTask) e
 	return r.db.WithContext(ctx).CreateInBatches(tasks, 100).Error
 }
 
+// CreateSubTasksWithLease 在同一事务内先续约拆分租约再写子任务。
+// 租约已被抢走时返回 ok=false 且不写入，避免慢分页期间产生永远 pending 的孤儿分片。
+func (r *TaskRepo) CreateSubTasksWithLease(ctx context.Context, mainTaskID uint64, workerID string, tasks []domain.SubTask) (bool, error) {
+	if len(tasks) == 0 {
+		return true, nil
+	}
+	if workerID == "" {
+		return true, r.CreateSubTasks(ctx, tasks)
+	}
+	var ok bool
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		res := tx.Model(&domain.MainTask{}).
+			Where("id = ? AND status = ? AND split_owner = ?", mainTaskID, domain.TaskStatusRunning, workerID).
+			Updates(map[string]any{"split_lease_at": time.Now()})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return nil
+		}
+		if err := tx.CreateInBatches(tasks, 100).Error; err != nil {
+			return err
+		}
+		ok = true
+		return nil
+	})
+	return ok, err
+}
+
+// ListFinishableMainTasks 计数已满却仍停在 running 的主任务（Redis 计数丢失导致的卡单）
+func (r *TaskRepo) ListFinishableMainTasks(ctx context.Context, staleSec int, limit int) ([]domain.MainTask, error) {
+	if staleSec <= 0 {
+		staleSec = 60
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+	deadline := time.Now().Add(-time.Duration(staleSec) * time.Second)
+	var list []domain.MainTask
+	err := r.db.WithContext(ctx).
+		Where(`status = ? AND sub_task_total > 0 AND sub_task_done >= sub_task_total
+			AND (split_owner = '' OR split_owner IS NULL) AND updated_at < ?`,
+			domain.TaskStatusRunning, deadline).
+		Order("id ASC").
+		Limit(limit).
+		Find(&list).Error
+	return list, err
+}
+
 func (r *TaskRepo) DeleteSubTasksByMainTask(ctx context.Context, mainTaskID uint64) (int64, error) {
 	res := r.db.WithContext(ctx).Where("main_task_id = ?", mainTaskID).Delete(&domain.SubTask{})
 	return res.RowsAffected, res.Error
@@ -559,6 +630,17 @@ func (r *TaskRepo) ReleaseSubTask(ctx context.Context, id uint64) error {
 			"started_at": nil,
 			"last_error": "released due to pause",
 		}).Error
+}
+
+// RenewSubTaskClaim 刷新 claimed_at，防止长耗时入队（pace 限速）期间被回收阈值抢占
+func (r *TaskRepo) RenewSubTaskClaim(ctx context.Context, id uint64, workerID string) (bool, error) {
+	res := r.db.WithContext(ctx).Model(&domain.SubTask{}).
+		Where("id = ? AND worker_id = ? AND status = ?", id, workerID, domain.TaskStatusRunning).
+		Updates(map[string]any{"claimed_at": time.Now()})
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
 }
 
 func (r *TaskRepo) ResetFailedSubTasks(ctx context.Context, mainTaskID uint64) (int64, error) {
@@ -1130,9 +1212,37 @@ GROUP BY status
 	return out, nil
 }
 
+// CreateTestRecord 测试流水的 main_task_id 恒为 0，同一 user+channel 会撞 uk_task_user_channel，
+// 因此撞键时改写既有记录，保证每次试发都能拿到可查的流水 ID。
 func (r *PushRepo) CreateTestRecord(ctx context.Context, rec *domain.PushRecord) error {
 	rec.IsTest = true
-	return r.db.WithContext(ctx).Create(rec).Error
+	err := r.db.WithContext(ctx).Create(rec).Error
+	if err == nil || !isDuplicateKey(err) {
+		return err
+	}
+
+	var existing domain.PushRecord
+	if err := r.db.WithContext(ctx).
+		Where("main_task_id = ? AND user_id = ? AND channel = ?", rec.MainTaskID, rec.UserID, rec.Channel).
+		First(&existing).Error; err != nil {
+		return err
+	}
+	fields := map[string]any{
+		"sub_task_id": rec.SubTaskID,
+		"content":     rec.Content,
+		"status":      rec.Status,
+		"provider":    rec.Provider,
+		"provider_id": rec.ProviderID,
+		"error_msg":   rec.ErrorMsg,
+		"is_test":     true,
+		"sent_at":     rec.SentAt,
+	}
+	if err := r.db.WithContext(ctx).Model(&domain.PushRecord{}).
+		Where("id = ?", existing.ID).Updates(fields).Error; err != nil {
+		return err
+	}
+	rec.ID = existing.ID
+	return nil
 }
 
 func (r *PushRepo) CreateExportJob(ctx context.Context, job *domain.ExportJob) error {

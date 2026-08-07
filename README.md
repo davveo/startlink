@@ -128,7 +128,7 @@ open http://localhost:3000
 
 | 服务 | 地址/端口 | 默认凭据 |
 | --- | --- | --- |
-| Web 运营台 | `http://localhost:3000` | 登录页；默认 `admin` / `admin123`（角色 admin；另有 operator/viewer 示例账号，务必改密） |
+| Web 运营台 | `http://localhost:3000` | 登录页；默认 `admin` / `admin12345`（角色 admin；另有 operator/viewer 示例账号，务必改密） |
 | API | `http://localhost:8080` | Session Cookie 鉴权；同运营台账号 |
 | MySQL | `localhost:3306/starlink` | `root` / `root` |
 | Redis | `localhost:6379` | 无密码 |
@@ -211,7 +211,7 @@ go run ./cmd/pusher -config configs/config.yaml -queue=normal
 ```bash
 curl -c /tmp/starlink.cookie -X POST http://localhost:8080/api/v1/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"username":"admin","password":"admin123"}'
+  -d '{"username":"admin","password":"admin12345"}'
 # 后续请求均加 -b /tmp/starlink.cookie
 ```
 
@@ -414,10 +414,10 @@ curl -b /tmp/starlink.cookie http://localhost:8080/api/v1/campaigns/biz/campaign
 | `webhook.default_url` | 默认回调地址 | 空 | 空 |
 | `webhook.timeout_sec` | 回调超时 | `5` | `5` |
 | `auth.enabled` | 是否启用运营台 Session 鉴权 | 未配则为 false（YAML 默认 true） | `true` |
-| `auth.session_secret` | HMAC 签名密钥 | `change-me-in-production` | 同左（生产务必更换） |
+| `auth.session_secret` | HMAC 签名密钥（至少 32 字节，可由 `STARLINK_SESSION_SECRET` 覆盖） | 开发密钥 | 同左（生产务必更换） |
 | `auth.cookie_name` | Session Cookie 名 | `starlink_session` | `starlink_session` |
 | `auth.ttl_hours` | Cookie 有效期（小时） | `24` | `24` |
-| `auth.users` | **仅库空时 seed** 进 `auth_users`（明文→bcrypt）；日常账号以库为准 | 空 | `admin` / `admin123` |
+| `auth.users` | **仅库空时 seed** 进 `auth_users`（明文→bcrypt）；日常账号以库为准 | 空 | `admin` / `admin12345` |
 
 `campaign.default_channel` 虽然存在于配置结构中，但创建活动逻辑没有读取它，调用方仍必须传 `channel` 或 `channels`。
 
@@ -444,9 +444,9 @@ curl -b /tmp/starlink.cookie http://localhost:8080/api/v1/campaigns/biz/campaign
 - **表**：`auth_users`（bcrypt 密码）、`auth_roles`、`auth_role_permissions`；AutoMigrate 创建
 - **Seed**：库空时从 YAML `auth.users` + 内置 admin/operator/viewer 角色写入；若存在旧 `auth_override.yaml` / `auth_roles.override.yaml` 则一次性迁入库并写 `auth_override.migrated` 标记
 - 默认 seed 账号（**务必改密**并更换 `session_secret`）：
-  - `admin` / `admin123` → 角色 `admin`
-  - `operator` / `operator123` → `operator`
-  - `viewer` / `viewer123` → `viewer`
+  - `admin` / `admin12345` → 角色 `admin`
+  - `operator` / `operator12345` → `operator`
+  - `viewer` / `viewer12345` → `viewer`
 
 日常赋权：侧栏 **角色配置 / 权限管理 / 用户管理**（需 `menu.settings` + `rbac.manage`）。YAML 不再作为运行时账号源。
 
@@ -457,7 +457,7 @@ curl 联调可先登录并保存 Cookie：
 ```bash
 curl -c /tmp/starlink.cookie -X POST http://localhost:8080/api/v1/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"username":"admin","password":"admin123"}'
+  -d '{"username":"admin","password":"admin12345"}'
 # 后续请求加 -b /tmp/starlink.cookie
 ```
 
@@ -1046,7 +1046,7 @@ pending → running ⇄ paused
 
 ### 六、安全与可观测性
 
-27. **安全能力部分缺失。** 运营台已有配置账号 + Session Cookie 登录门禁与简易 RBAC（租户隔离/改密 UI/多级审批仍待办）。渠道回执接口仍公开、无签名校验。`webhook_url` 由调用方任意提供且无白名单，存在 SSRF 风险；Webhook 本身也没有签名、重试或持久化 outbox。`response.Fail` 会把内部错误文本返回给客户端。
+27. **安全能力仍需继续生产化。** 运营台已有 Session Cookie + MySQL RBAC，密码只保存 bcrypt，密码/角色变更会使旧会话失效；回执支持 HMAC、时间窗和 nonce 防重放；Webhook 支持主机白名单、签名、并发限制和内存重试。仍待建设多租户、持久化 Webhook outbox、统一密钥管理和多级审批。
 28. **启动迁移风险。** API、Scheduler、Pusher 都会执行 `AutoMigrate`，三个进程可能并发执行 DDL；迁移前的历史重复流水清理错误还被 `_ =` 忽略。生产应由单独的迁移任务执行。
 29. **健康检查过浅。** `/healthz` 不检查依赖，没有 readiness、Prometheus 指标、链路追踪、结构化审计或告警。
 30. **~~测试为空~~（已有基础单测）。** 覆盖状态机、渠道求交、NormalizeChannels、ResolvePriority、RenderTemplate、MQ PEL/DLQ、聚合幂等；集成/E2E 仍待扩。
@@ -1187,7 +1187,7 @@ HTTP 网关接收 `SendRequest` JSON（含 `title`/`content`/`vars`/`extra`）�
 | 1 | 新建 `internal/adapter/channel/sms_aliyun.go`（示例名） | 实现 `port.ChannelSender`：`Channel()` 返回 `domain.ChannelSMS`，`Send` 调厂商 SDK |
 | 2 | `internal/bootstrap/bootstrap.go` | `RegisterDefaults` 之后（或替换其中一项）`chReg.Register(NewAliyunSMS(cfg))`；若要去掉 stub，不要再 `Register(NewSMS())`，或在 Defaults 里注释掉 |
 | 3 | `configs/config.yaml`（建议） | 增加厂商配置：AccessKey、签名、模板码、endpoint 等，并在 `config.Config` 增加对应结构 |
-| 4 | （可选）回执 | 厂商回调打到已有 `POST /api/v1/callbacks/receipt`，`provider_id` 必须与 `Send` 返回的 `ProviderID` 一致；生产应加签名校验 |
+| 4 | （可选）回执 | 厂商回调打到 `POST /api/v1/callbacks/receipt`；启用签名时需传 `X-Starlink-Timestamp`、`X-Starlink-Nonce`、`X-Starlink-Signature` |
 
 `Send` 约定：
 
@@ -1358,7 +1358,7 @@ func init() {
 3. ~~定义活动成功口径…~~（已完成，见 P1）。
 4. ~~给拆分加 lease…~~（已完成）。
 5. ~~P2 产品 SPI 接通（人群/渠道/频控/字段/模板/RocketMQ）~~（已完成）。
-6. 补单元测试、MySQL/Redis 集成测试和端到端测试；回执补签名校验。
+6. 补 MySQL/Redis 集成测试、端到端测试和故障注入；将 Webhook 重试升级为持久化 outbox。
 7. 再接入认证授权、Webhook 签名与 outbox、Prometheus 指标、追踪和独立迁移工具。
 
 ## 开发与检查

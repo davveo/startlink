@@ -498,6 +498,11 @@ func (s *Service) Publish(ctx context.Context, id uint64) (*CreateResult, error)
 	if task.Status != domain.TaskStatusDraft {
 		return nil, errcode.InvalidParam
 	}
+	if s.notifier != nil {
+		if err := s.notifier.ValidateTarget(task.WebhookURL); err != nil {
+			return nil, errcode.New(40001, err.Error())
+		}
+	}
 	if err := s.tasks.UpdateMainTaskFields(ctx, id, map[string]any{
 		"status": domain.TaskStatusPending,
 	}); err != nil {
@@ -516,6 +521,11 @@ func (s *Service) UpdateDraft(ctx context.Context, id uint64, in domain.CreateCa
 	}
 	if task.Status != domain.TaskStatusDraft {
 		return nil, errcode.InvalidParam
+	}
+	if s.notifier != nil {
+		if err := s.notifier.ValidateTarget(in.WebhookURL); err != nil {
+			return nil, errcode.New(40001, err.Error())
+		}
 	}
 	in.ApplyDefaultChannel(s.defaultChannel)
 	primary, chList, mode, err := in.NormalizeChannels()
@@ -744,6 +754,17 @@ func (s *Service) ListRecords(ctx context.Context, id uint64, q domain.ListPushR
 }
 
 func (s *Service) CreateExport(ctx context.Context, id uint64, kind, createdBy string) (*domain.ExportJob, error) {
+	select {
+	case s.exportSem <- struct{}{}:
+	default:
+		return nil, errcode.New(42901, "too many export jobs")
+	}
+	release := true
+	defer func() {
+		if release {
+			<-s.exportSem
+		}
+	}()
 	if _, err := s.tasks.GetMainTask(ctx, id); err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, errcode.NotFound
@@ -768,7 +789,11 @@ func (s *Service) CreateExport(ctx context.Context, id uint64, kind, createdBy s
 	if err := s.pushRepo.CreateExportJob(ctx, job); err != nil {
 		return nil, err
 	}
-	go s.runExport(job.ID)
+	release = false
+	go func() {
+		defer func() { <-s.exportSem }()
+		s.runExport(job.ID)
+	}()
 	return job, nil
 }
 
@@ -784,7 +809,8 @@ func (s *Service) GetExport(ctx context.Context, jobID uint64) (*domain.ExportJo
 }
 
 func (s *Service) runExport(jobID uint64) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
 	job, err := s.pushRepo.GetExportJob(ctx, jobID)
 	if err != nil {
 		return
@@ -794,7 +820,12 @@ func (s *Service) runExport(jobID uint64) {
 	if dir == "" {
 		dir = "data/exports"
 	}
-	_ = os.MkdirAll(dir, 0o755)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		_ = s.pushRepo.UpdateExportJob(ctx, jobID, map[string]any{
+			"status": domain.ExportStatusFailed, "error_msg": err.Error(),
+		})
+		return
+	}
 	path := filepath.Join(dir, fmt.Sprintf("export_%d_%s_%d.csv", job.MainTaskID, job.Kind, job.ID))
 	f, err := os.Create(path)
 	if err != nil {
@@ -803,7 +834,12 @@ func (s *Service) runExport(jobID uint64) {
 		})
 		return
 	}
-	defer f.Close()
+	closed := false
+	defer func() {
+		if !closed {
+			_ = f.Close()
+		}
+	}()
 	// Excel 打开 UTF-8 CSV 需要 BOM，否则中文表头/内容乱码
 	_, _ = f.WriteString("\uFEFF")
 	w := csv.NewWriter(f)
@@ -836,7 +872,7 @@ func (s *Service) runExport(jobID uint64) {
 			}
 			_ = w.Write([]string{
 				strconv.FormatUint(rec.ID, 10),
-				rec.UserID,
+				exportText(rec.UserID),
 				domain.ChannelLabelZH(rec.Channel),
 				domain.PushStatusLabelZH(rec.Status),
 				exportText(rec.Provider),
@@ -856,6 +892,25 @@ func (s *Service) runExport(jobID uint64) {
 		}
 	}
 	w.Flush()
+	if err := w.Error(); err != nil {
+		_ = s.pushRepo.UpdateExportJob(ctx, jobID, map[string]any{
+			"status": domain.ExportStatusFailed, "error_msg": err.Error(),
+		})
+		return
+	}
+	if err := f.Sync(); err != nil {
+		_ = s.pushRepo.UpdateExportJob(ctx, jobID, map[string]any{
+			"status": domain.ExportStatusFailed, "error_msg": err.Error(),
+		})
+		return
+	}
+	if err := f.Close(); err != nil {
+		_ = s.pushRepo.UpdateExportJob(ctx, jobID, map[string]any{
+			"status": domain.ExportStatusFailed, "error_msg": err.Error(),
+		})
+		return
+	}
+	closed = true
 	now := time.Now()
 	_ = s.pushRepo.UpdateExportJob(ctx, jobID, map[string]any{
 		"status":      domain.ExportStatusSuccess,
@@ -896,10 +951,16 @@ func (s *Service) SyncExportCSV(ctx context.Context, id uint64, kind string) ([]
 		}
 	default:
 		_ = w.Write([]string{"流水ID", "用户ID", "渠道", "状态", "供应商", "错误信息"})
+		const maxSyncRows = 10_000
+		rows := 0
 		err := s.pushRepo.IterPushRecords(ctx, id, func(rec domain.PushRecord) error {
+			rows++
+			if rows > maxSyncRows {
+				return errcode.New(40001, "result too large; use async export")
+			}
 			return w.Write([]string{
 				strconv.FormatUint(rec.ID, 10),
-				rec.UserID,
+				exportText(rec.UserID),
 				domain.ChannelLabelZH(rec.Channel),
 				domain.PushStatusLabelZH(rec.Status),
 				exportText(rec.Provider),
@@ -911,12 +972,19 @@ func (s *Service) SyncExportCSV(ctx context.Context, id uint64, kind string) ([]
 		}
 	}
 	w.Flush()
+	if err := w.Error(); err != nil {
+		return nil, "", err
+	}
 	return []byte(b.String()), filename, nil
 }
 
 func exportText(s string) string {
 	if strings.TrimSpace(s) == "" {
 		return "-"
+	}
+	trimmed := strings.TrimLeft(s, " \t\r\n")
+	if trimmed != "" && strings.ContainsRune("=+-@", rune(trimmed[0])) {
+		return "'" + s
 	}
 	return s
 }

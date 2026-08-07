@@ -103,6 +103,27 @@ func (w *Worker) loopSplit(ctx context.Context) {
 		case <-ticker.C:
 			w.splitPending(ctx)
 			w.recoverStaleSplits(ctx)
+			w.reapFinishedMainTasks(ctx)
+		}
+	}
+}
+
+// reapFinishedMainTasks 终态补推：Redis 计数丢失时主任务会永久停在 running，
+// 这里按 DB 的 sub_task_done 兜底推进终态（写 finished_at / Webhook / 站内信）。
+func (w *Worker) reapFinishedMainTasks(ctx context.Context) {
+	if w.agg == nil {
+		return
+	}
+	list, err := w.tasks.ListFinishableMainTasks(ctx, finishReapStaleSec, 10)
+	if err != nil {
+		slog.Error("list finishable main tasks", "err", err)
+		return
+	}
+	for i := range list {
+		id := list[i].ID
+		if err := w.agg.FinalizeStale(ctx, id); err != nil {
+			slog.Warn("finalize stale main task failed", "id", id, "err", err)
+			continue
 		}
 	}
 }
@@ -229,6 +250,11 @@ func (w *Worker) loopClaim(ctx context.Context, idx int) {
 		if errors.Is(err, errMainCancelled) || errors.Is(err, errMainPaused) {
 			continue
 		}
+		if errors.Is(err, errClaimLost) {
+			// 认领已被接管方抢走，写结果只会被拒；交给接管方继续
+			slog.Warn("abort subtask: claim lost", "sub_id", st.ID, "worker", st.WorkerID)
+			continue
+		}
 		if err != nil {
 			slog.Error("process subtask", "sub_id", st.ID, "err", err)
 			updated, uerr := w.tasks.UpdateSubTaskResult(ctx, st.ID, st.WorkerID, 0, st.TotalCount, domain.TaskStatusFailed, err.Error())
@@ -245,6 +271,24 @@ func (w *Worker) loopClaim(ctx context.Context, idx int) {
 	}
 }
 
+// isExpired 活动是否已过投放有效期
+func isExpired(main *domain.MainTask) bool {
+	return main != nil && main.ExpireAt != nil && !main.ExpireAt.IsZero() && time.Now().After(*main.ExpireAt)
+}
+
+// finishExpiredSubTask 过期活动的子任务直接收尾并计入聚合，让主任务能推进终态
+func (w *Worker) finishExpiredSubTask(ctx context.Context, st *domain.SubTask) error {
+	updated, err := w.tasks.UpdateSubTaskResult(ctx, st.ID, st.WorkerID, 0, st.TotalCount, domain.TaskStatusFailed, "campaign expired")
+	if err != nil {
+		return err
+	}
+	slog.Info("skip subtask: campaign expired", "sub_id", st.ID, "main_id", st.MainTaskID, "users", st.TotalCount)
+	if !updated {
+		return nil
+	}
+	return w.agg.OnSubFinished(ctx, st.MainTaskID, st.ID, 0, int64(st.TotalCount))
+}
+
 type subPayload struct {
 	UserIDs   []string                        `json:"user_ids"`
 	Vars      map[string]map[string]string    `json:"vars"`
@@ -257,6 +301,15 @@ type subPayload struct {
 var (
 	errMainCancelled = errors.New("main task cancelled")
 	errMainPaused    = errors.New("main task paused")
+	// errClaimLost 入队过程中丢失子任务认领，必须立即停手让接管方重发
+	errClaimLost = errors.New("subtask claim lost")
+)
+
+const (
+	// finishReapStaleSec 主任务计数满足终态后，等待正常聚合路径这么久仍未收尾才补推
+	finishReapStaleSec = 60
+	// renewClaimEvery pace 限速入队时每这么多条续租一次认领
+	renewClaimEvery = 50
 )
 
 func (w *Worker) processSubTask(ctx context.Context, st *domain.SubTask) error {
@@ -273,6 +326,10 @@ func (w *Worker) processSubTask(ctx context.Context, st *domain.SubTask) error {
 		_ = w.tasks.ReleaseSubTask(ctx, st.ID)
 		slog.Info("release subtask: main paused", "sub_id", st.ID, "main_id", st.MainTaskID)
 		return errMainPaused
+	}
+	// 过期活动不再入队：否则每个用户都要在 pusher 侧各写一次流水才标记 expired
+	if isExpired(main) {
+		return w.finishExpiredSubTask(ctx, st)
 	}
 
 	var payload subPayload
@@ -355,8 +412,11 @@ func (w *Worker) processSubTask(ctx context.Context, st *domain.SubTask) error {
 		_ = w.tasks.ReleaseSubTask(ctx, st.ID)
 		return errMainPaused
 	}
+	if isExpired(main) {
+		return w.finishExpiredSubTask(ctx, st)
+	}
 
-	if err := w.publishMsgs(ctx, main, msgs); err != nil {
+	if err := w.publishMsgs(ctx, main, st, msgs); err != nil {
 		return err
 	}
 
@@ -371,8 +431,22 @@ func (w *Worker) processSubTask(ctx context.Context, st *domain.SubTask) error {
 	return w.agg.OnSubFinished(ctx, st.MainTaskID, st.ID, int64(len(msgs)), 0)
 }
 
+func (w *Worker) renewClaim(ctx context.Context, st *domain.SubTask) error {
+	if st == nil || st.ID == 0 || st.WorkerID == "" {
+		return nil
+	}
+	ok, err := w.tasks.RenewSubTaskClaim(ctx, st.ID, st.WorkerID)
+	if err != nil {
+		return fmt.Errorf("renew subtask claim: %w", err)
+	}
+	if !ok {
+		return fmt.Errorf("%w: sub_id=%d worker=%s", errClaimLost, st.ID, st.WorkerID)
+	}
+	return nil
+}
+
 // publishMsgs 入队；渠道高压时按 backpressure 拉长 pace（二期反压）
-func (w *Worker) publishMsgs(ctx context.Context, main *domain.MainTask, msgs []domain.PushMessage) error {
+func (w *Worker) publishMsgs(ctx context.Context, main *domain.MainTask, st *domain.SubTask, msgs []domain.PushMessage) error {
 	if len(msgs) == 0 {
 		return nil
 	}
@@ -421,6 +495,12 @@ func (w *Worker) publishMsgs(ctx context.Context, main *domain.MainTask, msgs []
 				case <-ctx.Done():
 					return ctx.Err()
 				case <-time.After(interval):
+				}
+				// 低 pace 下单个子任务入队可远超回收阈值，不续租必被另一 worker 抢占重发
+				if i%renewClaimEvery == 0 {
+					if err := w.renewClaim(ctx, st); err != nil {
+						return err
+					}
 				}
 			}
 			if err := w.mq.Publish(ctx, msgs[i:i+1]); err != nil {

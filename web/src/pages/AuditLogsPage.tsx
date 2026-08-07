@@ -16,6 +16,7 @@ import {
   Th,
   Toast,
 } from '../components/ui'
+import { useClampPage, useDebounced, useRequestSeq } from '../lib/async'
 import { auditActionLabel } from '../lib/labels'
 
 function formatTime(v?: string) {
@@ -36,33 +37,44 @@ export function AuditLogsPage() {
   const [successFilter, setSuccessFilter] = useState<'' | '1' | '0'>('')
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
+  // 筛选条件未变时，「查询」按钮靠它强制重跑，避免按钮自己发一次请求
+  const [reloadTick, setReloadTick] = useState(0)
   const pageSize = 20
+  const seq = useRequestSeq()
+
+  const operatorQ = useDebounced(operator)
+  const actionQ = useDebounced(action)
 
   const load = useCallback(async () => {
+    const s = seq.next()
     setBusy(true)
     setErr('')
     try {
       const res = await api.listAuditLogs({
-        operator: operator || undefined,
-        action: action || undefined,
+        operator: operatorQ || undefined,
+        action: actionQ || undefined,
         success: successFilter === '' ? undefined : successFilter === '1',
         page,
         page_size: pageSize,
       })
+      if (!seq.isLatest(s)) return
       setItems(res.items ?? [])
       setTotal(res.total ?? 0)
     } catch (e) {
+      if (!seq.isLatest(s)) return
       setErr(e instanceof ApiError ? e.message : '加载审计日志失败')
     } finally {
-      setBusy(false)
+      if (seq.isLatest(s)) setBusy(false)
     }
-  }, [action, operator, page, successFilter])
+  }, [actionQ, operatorQ, page, seq, successFilter])
 
   useEffect(() => {
     void load()
-  }, [load])
+  }, [load, reloadTick])
 
   const pages = Math.max(1, Math.ceil(total / pageSize))
+
+  useClampPage(page, total, pageSize, setPage)
 
   return (
     <div>
@@ -73,12 +85,22 @@ export function AuditLogsPage() {
       <Panel>
         <div className="flex flex-wrap items-end gap-3">
           <Field label="操作者" noMargin className="min-w-[9rem] flex-[1_1_9rem]">
-            <Input value={operator} onChange={(e) => setOperator(e.target.value)} placeholder="用户名" />
+            <Input
+              value={operator}
+              onChange={(e) => {
+                setPage(1)
+                setOperator(e.target.value)
+              }}
+              placeholder="用户名"
+            />
           </Field>
           <Field label="动作" noMargin className="min-w-[11rem] flex-[1_1_11rem]">
             <Input
               value={action}
-              onChange={(e) => setAction(e.target.value)}
+              onChange={(e) => {
+                setPage(1)
+                setAction(e.target.value)
+              }}
               placeholder="campaign.create"
               title="可填前缀，如 campaign / auth"
             />
@@ -103,7 +125,7 @@ export function AuditLogsPage() {
               disabled={busy}
               onClick={() => {
                 setPage(1)
-                void load()
+                setReloadTick((t) => t + 1)
               }}
             >
               查询

@@ -27,6 +27,22 @@ type RoleInfo = {
 
 type PermInfo = { code: string; name: string; group: string; kind: string }
 
+const permPageSize = 200
+/** 兜底上限，避免后端 total 不准时死循环 */
+const permMaxPages = 25
+
+/** 角色弹窗要能勾选全部权限码，必须翻完所有分页，不能只拿第一页 */
+async function fetchAllPermissions(): Promise<PermInfo[]> {
+  const out: PermInfo[] = []
+  for (let page = 1; page <= permMaxPages; page += 1) {
+    const res = await api.rbacPermissions({ page, page_size: permPageSize })
+    const items = res.items ?? []
+    out.push(...items)
+    if (items.length < permPageSize || out.length >= (res.total ?? 0)) break
+  }
+  return out
+}
+
 export function SettingsRolesPage() {
   const [roles, setRoles] = useState<RoleInfo[]>([])
   const [perms, setPerms] = useState<PermInfo[]>([])
@@ -55,12 +71,9 @@ export function SettingsRolesPage() {
     setBusy(true)
     setErr('')
     try {
-      const [r, p] = await Promise.all([
-        api.rbacRoles(),
-        api.rbacPermissions({ page: 1, page_size: 200 }),
-      ])
+      const [r, p] = await Promise.all([api.rbacRoles(), fetchAllPermissions()])
       setRoles(r.items ?? [])
-      setPerms(p.items ?? [])
+      setPerms(p)
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : '加载角色失败')
     } finally {

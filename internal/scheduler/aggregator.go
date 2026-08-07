@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -24,7 +25,21 @@ func NewAggregator(tasks port.TaskRepository, cache port.AggregatorCache, notifi
 
 // OnSubFinished 子任务完成后聚合；按 subTaskID 幂等，重复调用不会虚高 done
 func (a *Aggregator) OnSubFinished(ctx context.Context, mainTaskID, subTaskID uint64, success, fail int64) error {
-	if subTaskID > 0 && a.cache != nil {
+	if a.cache == nil {
+		return fmt.Errorf("aggregator cache is required")
+	}
+
+	// 先读主任务再打标记：GetMainTask 无副作用，失败时不必回滚
+	main, err := a.tasks.GetMainTask(ctx, mainTaskID)
+	if err != nil {
+		return err
+	}
+	if main == nil {
+		return fmt.Errorf("main task %d not found", mainTaskID)
+	}
+
+	marked := false
+	if subTaskID > 0 {
 		first, err := a.cache.TryMarkSubFinished(ctx, mainTaskID, subTaskID)
 		if err != nil {
 			return err
@@ -33,40 +48,77 @@ func (a *Aggregator) OnSubFinished(ctx context.Context, mainTaskID, subTaskID ui
 			slog.Info("aggregator skip duplicate sub finish", "main_task_id", mainTaskID, "sub_id", subTaskID)
 			return nil
 		}
-	}
-
-	done, err := a.cache.IncrSubDone(ctx, mainTaskID, success, fail)
-	if err != nil {
-		return err
-	}
-
-	main, err := a.tasks.GetMainTask(ctx, mainTaskID)
-	if err != nil {
-		return err
+		marked = true
 	}
 	if main.Status.IsTerminal() {
 		return nil
 	}
 
+	// DB 的 sub_task_done 才是权威计数，先落库再动 Redis：
+	// 落库失败必须回滚幂等标记，否则该子任务的聚合永久丢失（调用方无重放路径）。
 	// 仅累加 sub_task_done；用户 success/fail 由 push_records 校准，避免与入队增量互相覆盖
-	_, err = a.tasks.UpdateMainTaskStats(ctx, main.ID, main.Version, 0, 0, 1, main.Status)
-	if err != nil {
+	if _, err := a.tasks.UpdateMainTaskStats(ctx, main.ID, main.Version, 0, 0, 1, main.Status); err != nil {
+		a.rollbackSubFinished(ctx, mainTaskID, subTaskID, marked)
 		return err
+	}
+
+	done := int64(main.SubTaskDone) + 1
+	// Redis 计数只是加速通道，出错不回滚标记（DB 已递增，回滚会导致重复累加）
+	if redisDone, err := a.cache.IncrSubDone(ctx, mainTaskID, success, fail); err != nil {
+		slog.Warn("aggregator incr redis counter failed, fallback to db counter",
+			"main_task_id", mainTaskID, "sub_id", subTaskID, "err", err)
+	} else if redisDone > done {
+		done = redisDone
 	}
 
 	// 暂停中：不推进终态
 	if main.Status == domain.TaskStatusPaused {
 		return nil
 	}
+	return a.finalizeIfDone(ctx, main, done)
+}
 
-	// 拆分未收尾（sub_task_total 尚未写入）时不推进终态
-	if main.SubTaskTotal <= 0 || int(done) < main.SubTaskTotal {
+func (a *Aggregator) rollbackSubFinished(ctx context.Context, mainTaskID, subTaskID uint64, marked bool) {
+	if !marked {
+		return
+	}
+	if err := a.cache.UnmarkSubFinished(ctx, mainTaskID, subTaskID); err != nil {
+		slog.Error("aggregator rollback sub finish mark failed",
+			"main_task_id", mainTaskID, "sub_id", subTaskID, "err", err)
+	}
+}
+
+// FinalizeStale 终态补推：Redis 计数丢失（重启/逐出/超 TTL）时主任务会永久停在 running，
+// 由 reaper 按 DB 的 sub_task_done 重新判定。CAS 保证与正常聚合路径不会重复推进。
+func (a *Aggregator) FinalizeStale(ctx context.Context, mainTaskID uint64) error {
+	if a.cache == nil {
+		return fmt.Errorf("aggregator cache is required")
+	}
+	main, err := a.tasks.GetMainTask(ctx, mainTaskID)
+	if err != nil {
+		return err
+	}
+	if main == nil || main.Status != domain.TaskStatusRunning {
 		return nil
 	}
+	return a.finalizeIfDone(ctx, main, int64(main.SubTaskDone))
+}
+
+// finalizeIfDone 全部子任务完成时 CAS 推进主任务终态
+func (a *Aggregator) finalizeIfDone(ctx context.Context, main *domain.MainTask, done int64) error {
+	// 拆分未收尾（sub_task_total 尚未写入）时不推进终态
+	if main.SubTaskTotal <= 0 || done < int64(main.SubTaskTotal) {
+		return nil
+	}
+	mainTaskID := main.ID
 
 	succTotal, failTotal, _, err := a.cache.GetSubDone(ctx, mainTaskID)
 	if err != nil {
 		return err
+	}
+	if succTotal == 0 && failTotal == 0 {
+		// Redis 计数已丢失（重启/逐出/超 TTL），退回 DB 计数判定，避免一律判成功
+		succTotal, failTotal = main.SuccessCount, main.FailCount
 	}
 	// 流水线终态仍按子任务入队成功/失败判定
 	final := domain.TaskStatusSuccess

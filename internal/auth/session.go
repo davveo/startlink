@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -31,13 +32,12 @@ var roleIDPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{1,31}$`)
 
 // AccountView 运营台账号视图（不含密码明文）。
 type AccountView struct {
-	Username        string `json:"username"`
-	DisplayName     string `json:"display_name,omitempty"`
-	Role            string `json:"role"`
-	Enabled         bool   `json:"enabled"`
-	Source          string `json:"source"` // db
-	PermissionCnt   int    `json:"permission_count"`
-	HasPasswordNote bool   `json:"has_password_note"` // 是否有可查看的密码副本
+	Username      string `json:"username"`
+	DisplayName   string `json:"display_name,omitempty"`
+	Role          string `json:"role"`
+	Enabled       bool   `json:"enabled"`
+	Source        string `json:"source"` // db
+	PermissionCnt int    `json:"permission_count"`
 }
 
 // Manager Session Cookie + DB 用户/角色。
@@ -46,6 +46,7 @@ type Manager struct {
 	secret     []byte
 	cookieName string
 	ttl        time.Duration
+	secure     bool
 	store      port.AuthRepository
 }
 
@@ -63,6 +64,7 @@ func NewManager(cfg config.AuthConfig, store port.AuthRepository) *Manager {
 		secret:     []byte(cfg.SessionSecret),
 		cookieName: cookieName,
 		ttl:        time.Duration(ttlHours) * time.Hour,
+		secure:     cfg.CookieSecure,
 		store:      store,
 	}
 }
@@ -75,20 +77,40 @@ func (m *Manager) ctx() context.Context {
 	return context.Background()
 }
 
-// Authenticate 查库校验 bcrypt 密码。
-func (m *Manager) Authenticate(username, password string) bool {
+// NormalizeUsername 统一小写去空白：MySQL utf8mb4_*_ci 下 "ADMIN" 与 "admin" 是同一行，
+// Go 侧若按大小写敏感比较，「不能禁用自己 / 不能自降权」这类自保护就能被大小写变体绕过。
+func NormalizeUsername(username string) string {
+	return strings.ToLower(strings.TrimSpace(username))
+}
+
+// timingDummyHash 用户不存在时也跑一次 bcrypt，抹平与"存在但密码错"的耗时差，避免用户名枚举。
+var timingDummyHash = sync.OnceValue(func() string {
+	h, err := HashPassword("starlink-timing-equalizer")
+	if err != nil {
+		return ""
+	}
+	return h
+})
+
+// Authenticate 查库校验 bcrypt 密码；成功返回库中权威用户名（后续签发 Cookie / 审计一律用它）。
+func (m *Manager) Authenticate(username, password string) (string, bool) {
+	username = NormalizeUsername(username)
 	if username == "" || m.store == nil {
-		return false
+		return "", false
 	}
 	u, err := m.store.GetUserByUsername(m.ctx(), username)
 	if err != nil || u == nil || !u.Enabled {
-		return false
+		CheckPassword(timingDummyHash(), password)
+		return "", false
 	}
-	return CheckPassword(u.PasswordHash, password)
+	if !CheckPassword(u.PasswordHash, password) {
+		return "", false
+	}
+	return u.Username, true
 }
 
 func (m *Manager) RoleOf(username string) string {
-	u, err := m.store.GetUserByUsername(m.ctx(), username)
+	u, err := m.store.GetUserByUsername(m.ctx(), NormalizeUsername(username))
 	if err != nil || u == nil {
 		return RoleViewer
 	}
@@ -99,14 +121,23 @@ func (m *Manager) PermissionsOf(username string) []string {
 	return m.PermissionsForRole(m.RoleOf(username))
 }
 
+// PermissionsForRole 角色权限集合，fail-closed：
+// 读库出错一律返回空集合（宁可 403 也不能放行），管理员把权限勾选清空后也必须真的是空集合，
+// 只有"角色行本身不存在"（空库 / 未 seed）才回退内置默认。
 func (m *Manager) PermissionsForRole(role string) []string {
 	role = NormalizeRole(role)
 	if m.store == nil {
 		return PermissionsForRoleFallback(role)
 	}
 	perms, err := m.store.ListRolePermissions(m.ctx(), role)
-	if err != nil || len(perms) == 0 {
-		// 角色无权限行时回退内置默认（防空库误伤）
+	if err != nil {
+		return nil
+	}
+	if len(perms) == 0 {
+		existing, err := m.store.GetRole(m.ctx(), role)
+		if err != nil || existing != nil {
+			return nil
+		}
 		if def, ok := DefaultRoleDefs()[role]; ok {
 			return append([]string(nil), def.Permissions...)
 		}
@@ -133,10 +164,12 @@ type UserInfo struct {
 }
 
 func (m *Manager) InfoFor(username string) UserInfo {
+	username = NormalizeUsername(username)
 	role := RoleViewer
 	display := ""
 	if m.store != nil {
 		if u, err := m.store.GetUserByUsername(m.ctx(), username); err == nil && u != nil {
+			username = u.Username
 			role = NormalizeRole(u.Role)
 			display = u.DisplayName
 		}
@@ -162,13 +195,12 @@ func (m *Manager) ListAccounts() []AccountView {
 	for _, u := range users {
 		role := NormalizeRole(u.Role)
 		out = append(out, AccountView{
-			Username:        u.Username,
-			DisplayName:     u.DisplayName,
-			Role:            role,
-			Enabled:         u.Enabled,
-			Source:          "db",
-			PermissionCnt:   len(m.PermissionsForRole(role)),
-			HasPasswordNote: u.PasswordNote != "",
+			Username:      u.Username,
+			DisplayName:   u.DisplayName,
+			Role:          role,
+			Enabled:       u.Enabled,
+			Source:        "db",
+			PermissionCnt: len(m.PermissionsForRole(role)),
 		})
 	}
 	return out
@@ -191,12 +223,8 @@ func (m *Manager) ListRoles() []RoleDef {
 	known, _ := m.store.ListAllPermissionCodes(m.ctx())
 	out := make([]RoleDef, 0, len(roles))
 	for _, r := range roles {
+		// 角色行已存在时不回填内置默认，否则"清空全部权限"在界面上会显示成又勾满了
 		perms := permMap[r.Code]
-		if len(perms) == 0 {
-			if def, ok := DefaultRoleDefs()[r.Code]; ok {
-				perms = def.Permissions
-			}
-		}
 		out = append(out, RoleDef{
 			Role:        r.Code,
 			Name:        r.Name,
@@ -282,11 +310,11 @@ func (m *Manager) UpdatePermission(code, name, group, kind, description string) 
 }
 
 func (m *Manager) CreateUser(username, password, role, displayName string) error {
-	username = strings.TrimSpace(username)
+	username = NormalizeUsername(username)
 	password = strings.TrimSpace(password)
 	role = NormalizeRole(role)
-	if !usernamePattern.MatchString(username) || len(password) < 4 {
-		return errcode.New(40001, "用户名需 2–32 位字母数字._-，密码至少 4 位")
+	if !usernamePattern.MatchString(username) || len(password) < 10 {
+		return errcode.New(40001, "用户名需 2–32 位字母数字._-，密码至少 10 位")
 	}
 	if m.store == nil {
 		return errcode.Internal
@@ -302,17 +330,18 @@ func (m *Manager) CreateUser(username, password, role, displayName string) error
 		return errcode.Internal
 	}
 	return m.store.CreateUser(m.ctx(), &domain.AuthUser{
-		Username:     username,
-		PasswordHash: hash,
-		PasswordNote: password,
-		DisplayName:  strings.TrimSpace(displayName),
-		Role:         role,
-		Enabled:      true,
+		Username:       username,
+		PasswordHash:   hash,
+		SessionVersion: 1,
+		DisplayName:    strings.TrimSpace(displayName),
+		Role:           role,
+		Enabled:        true,
 	})
 }
 
 func (m *Manager) UpdateUser(actor, username string, role *string, password *string, enabled *bool, displayName *string) error {
-	username = strings.TrimSpace(username)
+	username = NormalizeUsername(username)
+	actor = NormalizeUsername(actor)
 	if m.store == nil {
 		return errcode.Internal
 	}
@@ -323,6 +352,9 @@ func (m *Manager) UpdateUser(actor, username string, role *string, password *str
 	if u == nil {
 		return errcode.NotFound
 	}
+	// 以库中的用户名为准：请求里的大小写变体在 _ci 排序下同样命中这一行
+	username = u.Username
+	isSelf := strings.EqualFold(actor, u.Username)
 	fields := map[string]any{}
 	if role != nil {
 		r := NormalizeRole(*role)
@@ -336,28 +368,30 @@ func (m *Manager) UpdateUser(actor, username string, role *string, password *str
 			if n <= 1 {
 				return errcode.New(40001, "不能移除最后一个具备权限管理能力的管理员")
 			}
-			if actor == username {
+			if isSelf {
 				return errcode.New(40001, "不能取消自己的权限管理角色，以免锁死")
 			}
 		}
 		fields["role"] = r
+		fields["session_version"] = gorm.Expr("session_version + 1")
 	}
 	if password != nil {
 		p := strings.TrimSpace(*password)
 		if p != "" {
-			if len(p) < 4 {
-				return errcode.New(40001, "密码至少 4 位")
+			if len(p) < 10 {
+				return errcode.New(40001, "密码至少 10 位")
 			}
 			hash, err := HashPassword(p)
 			if err != nil {
 				return errcode.Internal
 			}
 			fields["password_hash"] = hash
-			fields["password_note"] = p
+			fields["password_note"] = ""
+			fields["session_version"] = gorm.Expr("session_version + 1")
 		}
 	}
 	if enabled != nil {
-		if actor == username && !*enabled {
+		if isSelf && !*enabled {
 			return errcode.New(40001, "不能禁用自己的账号")
 		}
 		if HasPermission(m.PermissionsForRole(u.Role), PermRBACManage) && !*enabled {
@@ -367,6 +401,7 @@ func (m *Manager) UpdateUser(actor, username string, role *string, password *str
 			}
 		}
 		fields["enabled"] = *enabled
+		fields["session_version"] = gorm.Expr("session_version + 1")
 	}
 	if displayName != nil {
 		fields["display_name"] = strings.TrimSpace(*displayName)
@@ -388,12 +423,12 @@ func (m *Manager) SetUserRole(actor, username, role string) error {
 	return m.UpdateUser(actor, username, &r, nil, nil, nil)
 }
 
-// ResetPassword 重置密码并写入可查看副本（password_note）。
+// ResetPassword 重置密码并使现有 Session 全部失效。
 func (m *Manager) ResetPassword(username, newPassword string) error {
-	username = strings.TrimSpace(username)
+	username = NormalizeUsername(username)
 	newPassword = strings.TrimSpace(newPassword)
-	if len(newPassword) < 4 {
-		return errcode.New(40001, "密码至少 4 位")
+	if len(newPassword) < 10 {
+		return errcode.New(40001, "密码至少 10 位")
 	}
 	if m.store == nil {
 		return errcode.Internal
@@ -409,25 +444,11 @@ func (m *Manager) ResetPassword(username, newPassword string) error {
 	if err != nil {
 		return errcode.Internal
 	}
-	return m.store.UpdateUser(m.ctx(), username, map[string]any{
-		"password_hash": hash,
-		"password_note": newPassword,
+	return m.store.UpdateUser(m.ctx(), u.Username, map[string]any{
+		"password_hash":   hash,
+		"password_note":   "",
+		"session_version": gorm.Expr("session_version + 1"),
 	})
-}
-
-// GetPasswordSecret 返回可查看的密码副本；无副本时 note 为空。
-func (m *Manager) GetPasswordSecret(username string) (note string, hasNote bool, err error) {
-	if m.store == nil {
-		return "", false, errcode.Internal
-	}
-	u, err := m.store.GetUserByUsername(m.ctx(), strings.TrimSpace(username))
-	if err != nil {
-		return "", false, err
-	}
-	if u == nil {
-		return "", false, errcode.NotFound
-	}
-	return u.PasswordNote, u.PasswordNote != "", nil
 }
 
 func (m *Manager) UpsertRole(roleID, name, description string, permissions []string, create bool) error {
@@ -481,13 +502,56 @@ func (m *Manager) UpsertRole(roleID, name, description string, permissions []str
 		if err := m.store.UpdateRole(m.ctx(), roleID, fields); err != nil {
 			return err
 		}
+		if err := m.guardLastRBACManageRole(roleID, perms); err != nil {
+			return err
+		}
 	}
 	return m.store.ReplaceRolePermissions(m.ctx(), roleID, perms)
 }
 
-func (m *Manager) IssueCookie(c *gin.Context, username string) {
+// guardLastRBACManageRole 从角色上摘掉 rbac.manage 前，确认系统里还留有别的管理员。
+// UpdateUser 侧已有同类保护，但改角色权限是另一条能把权限管理彻底锁死的路径：
+// 若 rbac.manage 只挂在这个自定义角色上，清空后无人能再进权限管理，也无法自救。
+func (m *Manager) guardLastRBACManageRole(roleID string, next []string) error {
+	current, err := m.store.ListRolePermissions(m.ctx(), roleID)
+	if err != nil {
+		return err
+	}
+	if !HasPermission(current, PermRBACManage) || HasPermission(next, PermRBACManage) {
+		return nil
+	}
+	total, err := m.store.CountEnabledUsersWithPermission(m.ctx(), PermRBACManage)
+	if err != nil {
+		return err
+	}
+	users, err := m.store.ListUsers(m.ctx())
+	if err != nil {
+		return err
+	}
+	var inRole int64
+	for _, u := range users {
+		if u.Enabled && NormalizeRole(u.Role) == roleID {
+			inRole++
+		}
+	}
+	if total-inRole <= 0 {
+		return errcode.New(40001, "不能移除最后一个具备权限管理能力的角色权限")
+	}
+	return nil
+}
+
+func (m *Manager) IssueCookie(c *gin.Context, username string) error {
+	u, err := m.store.GetUserByUsername(c.Request.Context(), NormalizeUsername(username))
+	if err != nil || u == nil || !u.Enabled {
+		return errcode.Unauthorized
+	}
+	version := u.SessionVersion
+	if version == 0 {
+		version = 1
+	}
 	exp := time.Now().Add(m.ttl).Unix()
-	token := m.sign(username, exp)
+	// 签库中的用户名，避免同一个人因大小写差异在审计里裂成两个身份
+	token := m.sign(u.Username, version, exp)
 	http.SetCookie(c.Writer, &http.Cookie{
 		Name:     m.cookieName,
 		Value:    token,
@@ -495,8 +559,9 @@ func (m *Manager) IssueCookie(c *gin.Context, username string) {
 		MaxAge:   int(m.ttl.Seconds()),
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		Secure:   false,
+		Secure:   m.secure,
 	})
+	return nil
 }
 
 func (m *Manager) ClearCookie(c *gin.Context) {
@@ -507,6 +572,7 @@ func (m *Manager) ClearCookie(c *gin.Context) {
 		MaxAge:   -1,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
+		Secure:   m.secure,
 	})
 }
 
@@ -569,9 +635,10 @@ func (m *Manager) RequirePermission(perm string) gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		perms, _ := c.Get(ctxPermsKey)
+		// 空集合是合法结果（角色被清空授权），只有上下文里压根没放过权限才回源查库
+		perms, ok := c.Get(ctxPermsKey)
 		list, _ := perms.([]string)
-		if list == nil {
+		if !ok {
 			list = m.PermissionsOf(UsernameFromContext(c))
 		}
 		if !HasPermission(list, perm) {
@@ -583,8 +650,8 @@ func (m *Manager) RequirePermission(perm string) gin.HandlerFunc {
 	}
 }
 
-func (m *Manager) sign(username string, exp int64) string {
-	payload := fmt.Sprintf("%s|%d", username, exp)
+func (m *Manager) sign(username string, version uint64, exp int64) string {
+	payload := fmt.Sprintf("%s|%d|%d", username, version, exp)
 	mac := hmac.New(sha256.New, m.secret)
 	_, _ = mac.Write([]byte(payload))
 	sig := hex.EncodeToString(mac.Sum(nil))
@@ -607,12 +674,21 @@ func (m *Manager) verify(token string) (string, error) {
 	if !hmac.Equal([]byte(expected), []byte(parts[1])) {
 		return "", fmt.Errorf("bad signature")
 	}
-	sep := strings.LastIndex(payload, "|")
-	if sep <= 0 {
+	// 末两段固定是 version|exp，用户名取其前的全部内容，含 "|" 的用户名也能正常登入
+	expSep := strings.LastIndexByte(payload, '|')
+	if expSep <= 0 {
 		return "", fmt.Errorf("bad payload")
 	}
-	username := payload[:sep]
-	exp, err := strconv.ParseInt(payload[sep+1:], 10, 64)
+	verSep := strings.LastIndexByte(payload[:expSep], '|')
+	if verSep <= 0 {
+		return "", fmt.Errorf("bad payload")
+	}
+	username := payload[:verSep]
+	version, err := strconv.ParseUint(payload[verSep+1:expSep], 10, 64)
+	if err != nil {
+		return "", err
+	}
+	exp, err := strconv.ParseInt(payload[expSep+1:], 10, 64)
 	if err != nil {
 		return "", err
 	}
@@ -622,9 +698,16 @@ func (m *Manager) verify(token string) (string, error) {
 	if m.store == nil {
 		return "", fmt.Errorf("auth store unavailable")
 	}
-	u, err := m.store.GetUserByUsername(m.ctx(), username)
+	u, err := m.store.GetUserByUsername(m.ctx(), NormalizeUsername(username))
 	if err != nil || u == nil || !u.Enabled {
 		return "", fmt.Errorf("unknown or disabled user")
 	}
-	return username, nil
+	currentVersion := u.SessionVersion
+	if currentVersion == 0 {
+		currentVersion = 1
+	}
+	if currentVersion != version {
+		return "", fmt.Errorf("session revoked")
+	}
+	return u.Username, nil
 }

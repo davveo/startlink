@@ -1,6 +1,12 @@
 server:
   addr: ":8080"
   mode: release
+  allowed_origins: ["http://localhost:3000"]
+  max_body_bytes: 2097152
+  read_header_timeout_sec: 5
+  read_timeout_sec: 15
+  write_timeout_sec: 30
+  idle_timeout_sec: 60
 
 log:
   level: info
@@ -8,18 +14,19 @@ log:
 
 auth:
   enabled: true
-  session_secret: "change-me-in-production"
+  session_secret: "dev-only-starlink-session-secret-change-me-2026"
   cookie_name: starlink_session
+  cookie_secure: false
   ttl_hours: 24
   users:
     - username: admin
-      password: admin123
+      password: admin12345
       role: admin
     - username: operator
-      password: operator123
+      password: operator12345
       role: operator
     - username: viewer
-      password: viewer123
+      password: viewer12345
       role: viewer
 
 mysql:
@@ -105,3 +112,12 @@ webhook:
   enabled: true
   default_url: ""
   timeout_sec: 5
+  allowed_hosts: []
+  allow_http: false
+  signing_secret: "dev-only-starlink-webhook-secret-change-me-2026"
+  max_concurrent: 32
+
+callback:
+  signature_required: true
+  signature_secret: "dev-only-starlink-callback-secret-change-me-2026"
+  max_skew_sec: 300

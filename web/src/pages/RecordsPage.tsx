@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { ApiError, api } from '../api/client'
 import type { ExportJob, PushRecord } from '../api/types'
@@ -22,8 +22,11 @@ import {
   Th,
   Toast,
 } from '../components/ui'
+import { useClampPage, useRequestSeq } from '../lib/async'
 
 const pageSize = 20
+/** 导出轮询上限（约 5 分钟）：后端不落终态时也不会无限轮询 */
+const exportPollLimit = 300
 
 export function RecordsPage() {
   const { user } = useAuth()
@@ -47,8 +50,11 @@ export function RecordsPage() {
   const [total, setTotal] = useState(0)
   const [exportJob, setExportJob] = useState<ExportJob | null>(null)
   const [busy, setBusy] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const [err, setErr] = useState('')
   const [msg, setMsg] = useState('')
+  const seq = useRequestSeq()
+  const exportTimerRef = useRef<number | undefined>(undefined)
 
   useEffect(() => {
     if (taskFromRoute) {
@@ -61,6 +67,7 @@ export function RecordsPage() {
   const load = useCallback(async () => {
     const id = Number(query.taskId)
     if (!Number.isFinite(id) || id <= 0) return
+    const s = seq.next()
     setBusy(true)
     setErr('')
     try {
@@ -71,18 +78,22 @@ export function RecordsPage() {
         page,
         page_size: pageSize,
       })
+      if (!seq.isLatest(s)) return
       setRecords(res.items ?? [])
       setTotal(res.total ?? 0)
     } catch (e) {
+      if (!seq.isLatest(s)) return
       setErr(e instanceof ApiError ? e.message : '加载流水失败')
     } finally {
-      setBusy(false)
+      if (seq.isLatest(s)) setBusy(false)
     }
-  }, [query, page])
+  }, [query, page, seq])
 
   useEffect(() => {
     if (Number(query.taskId) > 0) void load()
   }, [load, query.taskId])
+
+  useClampPage(page, total, pageSize, setPage)
 
   function onQuery() {
     const id = Number(taskId)
@@ -103,32 +114,53 @@ export function RecordsPage() {
     }
   }
 
+  function stopExportPoll() {
+    if (exportTimerRef.current !== undefined) {
+      window.clearInterval(exportTimerRef.current)
+      exportTimerRef.current = undefined
+    }
+  }
+
+  // 切走页面时必须停掉轮询，否则会一直请求并对已卸载组件 setState
+  useEffect(() => stopExportPoll, [])
+
   async function startExport() {
     const id = Number(query.taskId || taskId)
-    if (!id) return
-    setBusy(true)
+    // 轮询未结束前忽略重复点击，避免叠加定时器与后端导出任务
+    if (!id || exporting) return
+    setExporting(true)
     setErr('')
     try {
       const job = await api.createExport(id, 'records', user?.username)
       setExportJob(job)
       setMsg(`导出任务 #${job.id} 已创建`)
-      const timer = window.setInterval(async () => {
+      stopExportPoll()
+      let ticks = 0
+      exportTimerRef.current = window.setInterval(async () => {
+        ticks += 1
         try {
           const j = await api.getExport(job.id)
+          // 请求在途时可能已被卸载清理，此时不再写状态
+          if (exportTimerRef.current === undefined) return
           setExportJob(j)
           if (j.status === 'success' || j.status === 'failed') {
-            window.clearInterval(timer)
+            stopExportPoll()
+            setExporting(false)
             if (j.status === 'success') setMsg(`导出完成，共 ${j.row_count} 行`)
             else setErr(j.error_msg || '导出失败')
+          } else if (ticks >= exportPollLimit) {
+            stopExportPoll()
+            setExporting(false)
+            setErr('导出仍在进行，已停止自动查询，请稍后重试')
           }
         } catch {
-          window.clearInterval(timer)
+          stopExportPoll()
+          setExporting(false)
         }
       }, 1000)
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : '导出失败')
-    } finally {
-      setBusy(false)
+      setExporting(false)
     }
   }
 
@@ -207,8 +239,13 @@ export function RecordsPage() {
               查询
             </Button>
             <Can perm={Perm.CampaignExport}>
-              <Button variant="ghost" type="button" disabled={busy || !activeTask} onClick={() => void startExport()}>
-                异步导出
+              <Button
+                variant="ghost"
+                type="button"
+                disabled={busy || exporting || !activeTask}
+                onClick={() => void startExport()}
+              >
+                {exporting ? '导出中…' : '异步导出'}
               </Button>
               {activeTask > 0 ? (
                 <a

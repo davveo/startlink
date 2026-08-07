@@ -15,7 +15,15 @@ import (
 	"github.com/starlink/push/internal/port"
 )
 
-const mainStatusCacheTTL = 300 * time.Millisecond
+const (
+	mainStatusCacheTTL = 300 * time.Millisecond
+	// mainCacheSoftLimit 主任务状态缓存条目软上限，超过即触发清理
+	mainCacheSoftLimit = 1024
+)
+
+// tzCache 进程级时区缓存：Go 只缓存 ""/UTC/Local，
+// 其余名字每次 LoadLocation 都要读盘解析 tzdata。
+var tzCache sync.Map // string -> *time.Location
 
 // 包内哨兵：抑制态（频控/退订等已记流水，调用方视为“处理完成”）；主任务取消则停止发送链。
 var (
@@ -153,8 +161,25 @@ func (g *Gateway) loadMainSnap(ctx context.Context, mainTaskID uint64, force boo
 	}
 	g.mainMu.Lock()
 	g.mainCache[mainTaskID] = entry
+	g.sweepMainCacheLocked(now)
 	g.mainMu.Unlock()
 	return entry.status, entry.windows, nil
+}
+
+// sweepMainCacheLocked 条目仅靠 expiresAt 判失效不会释放内存，
+// 超过软上限时清理过期项；仍超限则整表丢弃（TTL 仅 300ms，重建代价可忽略）。
+func (g *Gateway) sweepMainCacheLocked(now time.Time) {
+	if len(g.mainCache) <= mainCacheSoftLimit {
+		return
+	}
+	for id, e := range g.mainCache {
+		if !now.Before(e.expiresAt) {
+			delete(g.mainCache, id)
+		}
+	}
+	if len(g.mainCache) > mainCacheSoftLimit {
+		g.mainCache = make(map[uint64]mainCacheEntry, mainCacheSoftLimit)
+	}
 }
 
 func (g *Gateway) InvalidateMainCache(mainTaskID uint64) {
@@ -230,14 +255,31 @@ func (g *Gateway) Handle(ctx context.Context, msg domain.PushMessage) error {
 
 func (g *Gateway) nowInTZ(tz string) time.Time {
 	now := time.Now()
-	if strings.TrimSpace(tz) == "" {
-		return now
-	}
-	loc, err := time.LoadLocation(tz)
-	if err != nil {
+	loc := loadLocationCached(tz)
+	if loc == nil {
 		return now
 	}
 	return now.In(loc)
+}
+
+// loadLocationCached 返回 nil 表示无需换算（空时区或非法时区名）。
+func loadLocationCached(tz string) *time.Location {
+	name := strings.TrimSpace(tz)
+	if name == "" {
+		return nil
+	}
+	if v, ok := tzCache.Load(name); ok {
+		loc, _ := v.(*time.Location)
+		return loc
+	}
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		// 负缓存非法时区名，避免坏数据反复触发磁盘 IO
+		tzCache.Store(name, (*time.Location)(nil))
+		return nil
+	}
+	tzCache.Store(name, loc)
+	return loc
 }
 
 func (g *Gateway) inQuietHours(bizScene string, now time.Time) bool {
@@ -311,9 +353,9 @@ func (g *Gateway) resolveContent(msg domain.PushMessage, ch domain.ChannelType) 
 	return rt, rb, extra, nil
 }
 
-func (g *Gateway) allowFreq(ctx context.Context, msg domain.PushMessage, ch domain.ChannelType) (bool, string) {
+func (g *Gateway) allowFreq(ctx context.Context, msg domain.PushMessage, ch domain.ChannelType) (bool, string, error) {
 	if !g.freq.Enabled || g.cache == nil {
-		return true, ""
+		return true, "", nil
 	}
 	checks := []struct {
 		key string
@@ -325,20 +367,26 @@ func (g *Gateway) allowFreq(ctx context.Context, msg domain.PushMessage, ch doma
 		{fmt.Sprintf("user:%s:ch:%s", msg.UserID, ch), g.freq.UserChannelLimit, g.freq.UserChannelWindowSec, "user_channel_freq"},
 		{fmt.Sprintf("scene:%s", msg.BizScene), g.freq.SceneLimit, g.freq.SceneWindowSec, "scene_freq"},
 	}
+	limits := make([]port.FrequencyLimit, 0, len(checks))
 	for _, c := range checks {
 		if c.lim <= 0 || c.win <= 0 {
 			continue
 		}
-		ok, err := g.cache.Allow(ctx, c.key, c.lim, c.win)
-		if err != nil {
-			slog.Warn("freq allow error", "key", c.key, "err", err)
-			continue
-		}
-		if !ok {
-			return false, c.why
-		}
+		limits = append(limits, port.FrequencyLimit{Key: c.key, Limit: c.lim, WindowSec: c.win})
 	}
-	return true, ""
+	ok, err := g.cache.AllowAll(ctx, limits)
+	if err != nil {
+		// 事务消息优先可达，营销消息在频控不可判定时 fail-closed。
+		if msg.Priority.Normalize() == domain.PriorityHigh {
+			slog.Warn("freq check failed, fail-open for high priority", "user", msg.UserID, "err", err)
+			return true, "", nil
+		}
+		return false, "freq_unavailable", fmt.Errorf("%w: %v", domain.ErrFrequencyUnavailable, err)
+	}
+	if ok {
+		return true, "", nil
+	}
+	return false, "frequency_limit", nil
 }
 
 // checkUnsubscribed 发送前按 user+channel 终检。
@@ -354,7 +402,8 @@ func (g *Gateway) checkUnsubscribed(ctx context.Context, msg domain.PushMessage,
 				"user", msg.UserID, "channel", ch, "err", err)
 			return nil
 		}
-		return fmt.Errorf("unsubscribe check: %w", err)
+		// 与频控一致：不可判定不是失败，包装成 deferred 哨兵留 PEL 等 Redis 恢复
+		return fmt.Errorf("%w: %v", domain.ErrUnsubscribeUnavailable, err)
 	}
 	if ok {
 		return domain.ErrUnsubscribed
@@ -440,11 +489,11 @@ func (g *Gateway) sendFallback(ctx context.Context, msg domain.PushMessage, chs 
 			anySuppressed = true
 			continue
 		}
-		if errors.Is(err, domain.ErrMainTaskPaused) ||
+		// 不可判定/需退避的错误换个渠道也是同样结果，直接留 PEL 重投
+		if isRetryableSendErr(err) ||
+			errors.Is(err, domain.ErrMainTaskPaused) ||
 			errors.Is(err, domain.ErrOutsideSendWindow) ||
-			errors.Is(err, domain.ErrQuietHours) ||
-			errors.Is(err, domain.ErrChannelThrottled) ||
-			errors.Is(err, domain.ErrMainStatusUnavailable) {
+			errors.Is(err, domain.ErrQuietHours) {
 			return err
 		}
 		if err == nil {
@@ -463,29 +512,39 @@ func (g *Gateway) sendFallback(ctx context.Context, msg domain.PushMessage, chs 
 }
 
 // sendParallel 同内容多渠道并行；任一成功即用户成功，全部失败才失败
+type sendOutcome struct {
+	ch  domain.ChannelType
+	ok  bool
+	err error
+}
+
 func (g *Gateway) sendParallel(ctx context.Context, msg domain.PushMessage, chs []domain.ChannelType) error {
-	type outcome struct {
-		ch  domain.ChannelType
-		ok  bool
-		err error
-	}
-	ch := make(chan outcome, len(chs))
+	ch := make(chan sendOutcome, len(chs))
 	var wg sync.WaitGroup
 	for _, c := range chs {
 		wg.Add(1)
 		go func(chType domain.ChannelType) {
 			defer wg.Done()
 			ok, err := g.sendOne(ctx, msg, chType, true)
-			ch <- outcome{ch: chType, ok: ok, err: err}
+			ch <- sendOutcome{ch: chType, ok: ok, err: err}
 		}(c)
 	}
 	wg.Wait()
 	close(ch)
 
+	outcomes := make([]sendOutcome, 0, len(chs))
+	for o := range ch {
+		outcomes = append(outcomes, o)
+	}
+	return classifyParallelOutcomes(outcomes)
+}
+
+func classifyParallelOutcomes(outcomes []sendOutcome) error {
 	anyOK := false
 	anySuppressed := false
 	var lastErr error
-	for o := range ch {
+	var deferredErr error
+	for _, o := range outcomes {
 		if o.ok {
 			anyOK = true
 			continue
@@ -495,17 +554,18 @@ func (g *Gateway) sendParallel(ctx context.Context, msg domain.PushMessage, chs 
 			continue
 		}
 		if o.err != nil {
-			if errors.Is(o.err, domain.ErrChannelThrottled) ||
-				errors.Is(o.err, domain.ErrMainStatusUnavailable) ||
-				errors.Is(o.err, context.Canceled) ||
-				errors.Is(o.err, context.DeadlineExceeded) {
-				return o.err
+			if isRetryableSendErr(o.err) {
+				deferredErr = o.err
+				continue
 			}
 			lastErr = o.err
 		}
 	}
 	if anyOK {
 		return nil
+	}
+	if deferredErr != nil {
+		return deferredErr
 	}
 	if lastErr != nil {
 		return lastErr
@@ -518,48 +578,64 @@ func (g *Gateway) sendParallel(ctx context.Context, msg domain.PushMessage, chs 
 
 // sendAllSuccess 并行发送，全部渠道成功才算成功
 func (g *Gateway) sendAllSuccess(ctx context.Context, msg domain.PushMessage, chs []domain.ChannelType) error {
-	type outcome struct {
-		ch  domain.ChannelType
-		ok  bool
-		err error
-	}
-	ch := make(chan outcome, len(chs))
+	ch := make(chan sendOutcome, len(chs))
 	var wg sync.WaitGroup
 	for _, c := range chs {
 		wg.Add(1)
 		go func(chType domain.ChannelType) {
 			defer wg.Done()
 			ok, err := g.sendOne(ctx, msg, chType, true)
-			ch <- outcome{ch: chType, ok: ok, err: err}
+			ch <- sendOutcome{ch: chType, ok: ok, err: err}
 		}(c)
 	}
 	wg.Wait()
 	close(ch)
 
-	var lastErr error
+	outcomes := make([]sendOutcome, 0, len(chs))
 	for o := range ch {
+		outcomes = append(outcomes, o)
+	}
+	return classifyAllSuccessOutcomes(outcomes)
+}
+
+func classifyAllSuccessOutcomes(outcomes []sendOutcome) error {
+	var lastErr error
+	var retryableErr error
+	for _, o := range outcomes {
 		if o.ok {
 			continue
 		}
+		// 抑制（退订/频控超限/渠道未注册）是确定性终态，重试 N 次结果相同。
+		// 视为已处理直接 ACK，结果由 push_records 的 suppressed 状态体现。
 		if errors.Is(o.err, errSuppressed) {
-			return fmt.Errorf("all_success: channel %s suppressed", o.ch)
+			slog.Info("all_success: channel suppressed, ack without retry", "channel", o.ch)
+			continue
 		}
 		if o.err != nil {
-			if errors.Is(o.err, domain.ErrChannelThrottled) ||
-				errors.Is(o.err, domain.ErrMainStatusUnavailable) ||
-				errors.Is(o.err, context.Canceled) ||
-				errors.Is(o.err, context.DeadlineExceeded) {
-				return o.err
+			if isRetryableSendErr(o.err) {
+				retryableErr = o.err
+				continue
 			}
 			lastErr = o.err
 			continue
 		}
 		lastErr = fmt.Errorf("all_success: channel %s failed", o.ch)
 	}
-	if lastErr != nil {
-		return lastErr
+	// 可重试错误优先：渠道限流/频控不可判定等只是本轮未完成，留 PEL 重投。
+	if retryableErr != nil {
+		return retryableErr
 	}
-	return nil
+	return lastErr
+}
+
+// isRetryableSendErr 标记"本轮不可判定/需退避"的错误：不落终态，留 PEL 重投。
+func isRetryableSendErr(err error) bool {
+	return errors.Is(err, domain.ErrChannelThrottled) ||
+		errors.Is(err, domain.ErrFrequencyUnavailable) ||
+		errors.Is(err, domain.ErrUnsubscribeUnavailable) ||
+		errors.Is(err, domain.ErrMainStatusUnavailable) ||
+		errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded)
 }
 
 // sendOne 发送单一渠道；save=true 时写流水并做用户+活动+渠道去重。返回 (是否成功, error)
@@ -577,7 +653,7 @@ func (g *Gateway) sendOne(ctx context.Context, msg domain.PushMessage, ch domain
 		return false, renderErr
 	}
 
-	if save {
+	if save && g.pushRepo != nil {
 		if g.cache != nil {
 			if ok, err := g.cache.HasDelivered(ctx, msg.MainTaskID, msg.UserID, ch); err == nil && ok {
 				slog.Info("dedup skip: redis", "main_task_id", msg.MainTaskID, "user", msg.UserID, "channel", ch)
@@ -610,7 +686,11 @@ func (g *Gateway) sendOne(ctx context.Context, msg domain.PushMessage, ch domain
 			return false, err
 		}
 
-		if ok, why := g.allowFreq(ctx, msg, ch); !ok {
+		if ok, why, freqErr := g.allowFreq(ctx, msg, ch); !ok {
+			if freqErr != nil {
+				_ = g.pushRepo.UpdateRecordStatus(ctx, recordID, domain.PushStatusQueued, "", freqErr.Error())
+				return false, freqErr
+			}
 			_ = g.pushRepo.UpdateRecordStatus(ctx, recordID, domain.PushStatusSuppressed, "", why)
 			slog.Info("freq denied", "user", msg.UserID, "channel", ch, "reason", why)
 			return false, errSuppressed
@@ -639,7 +719,10 @@ func (g *Gateway) sendOne(ctx context.Context, msg domain.PushMessage, ch domain
 		}
 		return false, err
 	}
-	if ok, _ := g.allowFreq(ctx, msg, ch); !ok {
+	if ok, _, freqErr := g.allowFreq(ctx, msg, ch); !ok {
+		if freqErr != nil {
+			return false, freqErr
+		}
 		return false, errSuppressed
 	}
 	if err := g.waitToken(ctx, ch, msg.Priority); err != nil {
@@ -699,6 +782,9 @@ func (g *Gateway) doSend(ctx context.Context, msg domain.PushMessage, ch domain.
 		}
 		if result != nil && !result.Retryable && lastErr == nil {
 			break
+		}
+		if attempt == g.maxRetry {
+			break // 已是最后一次尝试，无需再退避
 		}
 		backoff := time.Duration(1<<attempt) * 50 * time.Millisecond
 		select {

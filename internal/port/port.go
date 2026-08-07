@@ -91,7 +91,14 @@ type TaskRepository interface {
 	// UpdateMainTaskFields 局部更新主任务字段
 	UpdateMainTaskFields(ctx context.Context, id uint64, fields map[string]any) error
 
+	// ListFinishableMainTasks 列出计数已满却仍停在 running 的主任务（终态补推 reaper）；
+	// staleSec 用于跳过刚刚更新、正常聚合路径还在推进的任务
+	ListFinishableMainTasks(ctx context.Context, staleSec int, limit int) ([]domain.MainTask, error)
+
 	CreateSubTasks(ctx context.Context, tasks []domain.SubTask) error
+	// CreateSubTasksWithLease 同事务校验并续约拆分租约后写入子任务；
+	// ok=false 表示租约已被他人抢走，调用方必须中止本次拆分，避免留下孤儿子任务
+	CreateSubTasksWithLease(ctx context.Context, mainTaskID uint64, workerID string, tasks []domain.SubTask) (ok bool, err error)
 	// DeleteSubTasksByMainTask 删除主任务下全部子任务（卡单重拆前清理半成品）
 	DeleteSubTasksByMainTask(ctx context.Context, mainTaskID uint64) (int64, error)
 	// ClaimSubTask 原子认领一个待执行/超时子任务（水平扩展核心）；已取消主任务下的子任务不会被认领
@@ -100,6 +107,8 @@ type TaskRepository interface {
 	CancelUnfinishedSubTasks(ctx context.Context, mainTaskID uint64) (int64, error)
 	// ReleaseSubTask 将执行中的子任务释放回 pending（暂停场景）
 	ReleaseSubTask(ctx context.Context, id uint64) error
+	// RenewSubTaskClaim 长耗时入队过程中续租认领；ok=false 表示已被回收/抢占，应立即中止
+	RenewSubTaskClaim(ctx context.Context, id uint64, workerID string) (ok bool, err error)
 	// ResetFailedSubTasks 将失败子任务重置为 pending，返回影响行数
 	ResetFailedSubTasks(ctx context.Context, mainTaskID uint64) (int64, error)
 	// MaxShardIndex 当前最大分片号，无子任务返回 -1
@@ -223,6 +232,12 @@ type UnsubscribeChecker interface {
 	IsUnsubscribed(ctx context.Context, userID string, channel domain.ChannelType) (bool, error)
 }
 
+type FrequencyLimit struct {
+	Key       string
+	Limit     int
+	WindowSec int
+}
+
 // AggregatorCache 子任务终态计数 / 频控 / 投递去重（Redis）
 type AggregatorCache interface {
 	IncrSubDone(ctx context.Context, mainTaskID uint64, success, fail int64) (done int64, err error)
@@ -231,8 +246,12 @@ type AggregatorCache interface {
 	SetSubDone(ctx context.Context, mainTaskID uint64, success, fail, done int64) error
 	// TryMarkSubFinished 按子任务幂等标记完成；first=true 表示首次，应累加聚合计数
 	TryMarkSubFinished(ctx context.Context, mainTaskID, subTaskID uint64) (first bool, err error)
+	// UnmarkSubFinished 回滚幂等标记；聚合中途失败时必须调用，否则该子任务永远不再计入
+	UnmarkSubFinished(ctx context.Context, mainTaskID, subTaskID uint64) error
 	// Allow 频控：返回是否允许推送
 	Allow(ctx context.Context, key string, limit int, windowSec int) (bool, error)
+	// AllowAll 原子检查并扣减所有频控维度；任一维度超限时不消耗其它计数。
+	AllowAll(ctx context.Context, limits []FrequencyLimit) (bool, error)
 	// HasDelivered 用户+活动+渠道是否已成功投递（快路径）
 	HasDelivered(ctx context.Context, mainTaskID uint64, userID string, channel domain.ChannelType) (bool, error)
 	// MarkDelivered 标记成功投递，TTL 覆盖活动生命周期

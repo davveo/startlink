@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"strconv"
 	"time"
 
@@ -79,6 +80,8 @@ func (h *NotificationHandler) Stream(c *gin.Context) {
 	c.Writer.Header().Set("Cache-Control", "no-cache")
 	c.Writer.Header().Set("Connection", "keep-alive")
 	c.Writer.Header().Set("X-Accel-Buffering", "no")
+	// SSE 是长连接；为该响应清除 Server.WriteTimeout，心跳仍负责发现断连。
+	_ = http.NewResponseController(c.Writer).SetWriteDeadline(time.Time{})
 
 	// 连接时先推一次当前未读数
 	if n, err := h.svc.UnreadCount(c.Request.Context()); err == nil {

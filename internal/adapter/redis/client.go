@@ -8,6 +8,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 	"github.com/starlink/push/internal/domain"
+	"github.com/starlink/push/internal/port"
 )
 
 type Client struct {
@@ -93,16 +94,50 @@ func (a *Aggregator) TryMarkSubFinished(ctx context.Context, mainTaskID, subTask
 	return n == 1, nil
 }
 
+// UnmarkSubFinished 回滚幂等标记，供聚合中途失败时重放
+func (a *Aggregator) UnmarkSubFinished(ctx context.Context, mainTaskID, subTaskID uint64) error {
+	return a.rdb.SRem(ctx, keySubFinished(mainTaskID), strconv.FormatUint(subTaskID, 10)).Err()
+}
+
 func (a *Aggregator) Allow(ctx context.Context, key string, limit int, windowSec int) (bool, error) {
-	k := "starlink:freq:" + key
-	n, err := a.rdb.Incr(ctx, k).Result()
+	return a.AllowAll(ctx, []port.FrequencyLimit{{Key: key, Limit: limit, WindowSec: windowSec}})
+}
+
+var allowAllScript = redis.NewScript(`
+for i, key in ipairs(KEYS) do
+  local current = tonumber(redis.call('GET', key) or '0')
+  local limit = tonumber(ARGV[(i - 1) * 2 + 1])
+  if current >= limit then
+    return 0
+  end
+end
+for i, key in ipairs(KEYS) do
+  local value = redis.call('INCR', key)
+  if value == 1 then
+    redis.call('PEXPIRE', key, tonumber(ARGV[(i - 1) * 2 + 2]))
+  end
+end
+return 1
+`)
+
+func (a *Aggregator) AllowAll(ctx context.Context, limits []port.FrequencyLimit) (bool, error) {
+	keys := make([]string, 0, len(limits))
+	args := make([]any, 0, len(limits)*2)
+	for _, item := range limits {
+		if item.Limit <= 0 || item.WindowSec <= 0 {
+			continue
+		}
+		keys = append(keys, "starlink:freq:"+item.Key)
+		args = append(args, item.Limit, int64(item.WindowSec)*int64(time.Second/time.Millisecond))
+	}
+	if len(keys) == 0 {
+		return true, nil
+	}
+	n, err := allowAllScript.Run(ctx, a.rdb, keys, args...).Int64()
 	if err != nil {
 		return false, err
 	}
-	if n == 1 {
-		a.rdb.Expire(ctx, k, time.Duration(windowSec)*time.Second)
-	}
-	return n <= int64(limit), nil
+	return n == 1, nil
 }
 
 func dedupKey(mainTaskID uint64, userID string, channel domain.ChannelType) string {

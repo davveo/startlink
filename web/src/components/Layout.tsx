@@ -43,13 +43,16 @@ export function Layout() {
 
     void refresh()
 
-    // SSE 为主；断线由 EventSource 自动重连，重连时再拉一次未读作兜底
+    // SSE 为主；传输层断开由 EventSource 自动重连，重连时再拉一次未读作兜底
     let es: EventSource | null = null
     let softTimer: number | undefined
+    let retryTimer: number | undefined
+    let retryDelay = 1000
 
     const connect = () => {
       es?.close()
-      es = new EventSource('/api/v1/notifications/stream', { withCredentials: true })
+      const source = new EventSource('/api/v1/notifications/stream', { withCredentials: true })
+      es = source
       const onPayload = (ev: MessageEvent) => {
         try {
           const data = JSON.parse(String(ev.data)) as { unread_count?: number; type?: string }
@@ -63,13 +66,20 @@ export function Layout() {
           /* ignore malformed */
         }
       }
-      es.addEventListener('notification', onPayload)
-      es.addEventListener('unread', onPayload)
-      es.onopen = () => {
+      source.addEventListener('notification', onPayload)
+      source.addEventListener('unread', onPayload)
+      source.onopen = () => {
+        retryDelay = 1000
         void refresh()
       }
-      es.onerror = () => {
-        // 浏览器会自动重连；保留弱轮询作 scheduler 跨进程兜底
+      source.onerror = () => {
+        // 响应非 200 或 Content-Type 不符时（会话过期 401 / hub 空 500 / 反代 502），
+        // 规范要求 fail the connection：readyState 变 CLOSED 且浏览器不再自动重连，只能自己退避重连。
+        if (!alive || source.readyState !== EventSource.CLOSED) return
+        source.close()
+        if (retryTimer) window.clearTimeout(retryTimer)
+        retryTimer = window.setTimeout(connect, retryDelay)
+        retryDelay = Math.min(retryDelay * 2, 30_000)
       }
     }
     connect()
@@ -83,6 +93,7 @@ export function Layout() {
       alive = false
       es?.close()
       if (softTimer) window.clearInterval(softTimer)
+      if (retryTimer) window.clearTimeout(retryTimer)
       window.removeEventListener('starlink:notifications-changed', onChanged)
     }
   }, [])

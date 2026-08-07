@@ -33,6 +33,7 @@ type Service struct {
 	audience       AudienceResolver
 	channels       *channel.Registry
 	exportDir      string
+	exportSem      chan struct{}
 }
 
 type Deps struct {
@@ -74,6 +75,7 @@ func NewService(deps Deps) *Service {
 		audience:       deps.Audience,
 		channels:       deps.Channels,
 		exportDir:      exportDir,
+		exportSem:      make(chan struct{}, 4),
 	}
 }
 
@@ -211,6 +213,11 @@ func (s *Service) Create(ctx context.Context, in domain.CreateCampaignInput) (*C
 	}
 	if s.templates == nil {
 		return nil, errcode.Internal
+	}
+	if s.notifier != nil {
+		if err := s.notifier.ValidateTarget(in.WebhookURL); err != nil {
+			return nil, errcode.New(40001, err.Error())
+		}
 	}
 
 	// 基础校验后优先查幂等：模板后续停用不影响同一 biz_id 重试

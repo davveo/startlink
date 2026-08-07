@@ -16,6 +16,7 @@ import {
   Th,
   Toast,
 } from '../components/ui'
+import { useClampPage, useDebounced, useRequestSeq } from '../lib/async'
 
 type PermInfo = {
   code: string
@@ -56,7 +57,11 @@ export function SettingsPermissionsPage() {
     description: '',
   })
 
+  const seq = useRequestSeq()
+  const groupQ = useDebounced(group)
+
   const load = useCallback(async () => {
+    const s = seq.next()
     setBusy(true)
     setErr('')
     try {
@@ -64,23 +69,27 @@ export function SettingsPermissionsPage() {
         page,
         page_size: pageSize,
         keyword: keyword || undefined,
-        group: group || undefined,
+        group: groupQ.trim() || undefined,
         kind: kind || undefined,
       })
+      if (!seq.isLatest(s)) return
       setItems(res.items ?? [])
       setTotal(res.total ?? 0)
     } catch (e) {
+      if (!seq.isLatest(s)) return
       setErr(e instanceof ApiError ? e.message : '加载权限目录失败')
     } finally {
-      setBusy(false)
+      if (seq.isLatest(s)) setBusy(false)
     }
-  }, [group, kind, keyword, page])
+  }, [groupQ, kind, keyword, page, seq])
 
   useEffect(() => {
     void load()
   }, [load])
 
   const pages = Math.max(1, Math.ceil(total / pageSize))
+
+  useClampPage(page, total, pageSize, setPage)
 
   async function onCreate(e: FormEvent) {
     e.preventDefault()

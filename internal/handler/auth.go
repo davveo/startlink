@@ -27,13 +27,20 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		response.Fail(c, errcode.InvalidParam)
 		return
 	}
-	if !h.sessions.Authenticate(req.Username, req.Password) {
+	// 先记录待审计的用户名：失败登录也要能看出被尝试的是哪个账号，否则爆破在审计里全是 anonymous。
+	c.Set("audit_login_user", req.Username)
+	username, ok := h.sessions.Authenticate(req.Username, req.Password)
+	if !ok {
 		response.Fail(c, errcode.Unauthorized)
 		return
 	}
-	c.Set("audit_login_user", req.Username)
-	h.sessions.IssueCookie(c, req.Username)
-	info := h.sessions.InfoFor(req.Username)
+	// 以库中的用户名为准签发，避免大小写差异让同一账号在审计里分裂成两个身份。
+	c.Set("audit_login_user", username)
+	if err := h.sessions.IssueCookie(c, username); err != nil {
+		response.Fail(c, err)
+		return
+	}
+	info := h.sessions.InfoFor(username)
 	response.OK(c, gin.H{
 		"username":     info.Username,
 		"display_name": info.DisplayName,

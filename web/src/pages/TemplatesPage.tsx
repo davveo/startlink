@@ -21,6 +21,7 @@ import {
   Th,
   Toast,
 } from '../components/ui'
+import { useDebounced, useRequestSeq } from '../lib/async'
 
 export function TemplatesPage() {
   const { user } = useAuth()
@@ -33,20 +34,26 @@ export function TemplatesPage() {
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
 
+  const seq = useRequestSeq()
+  const keywordQ = useDebounced(keyword)
+
   const load = useCallback(async () => {
+    const s = seq.next()
     try {
       const res = await api.listTemplates({
         status,
-        keyword: keyword.trim() || undefined,
+        keyword: keywordQ.trim() || undefined,
         page: 1,
         page_size: 50,
       })
+      if (!seq.isLatest(s)) return
       setItems(res.items ?? [])
       setTotal(res.total ?? 0)
     } catch (e) {
+      if (!seq.isLatest(s)) return
       setErr(e instanceof ApiError ? e.message : '加载模板失败')
     }
-  }, [keyword, status])
+  }, [keywordQ, seq, status])
 
   useEffect(() => {
     void load()

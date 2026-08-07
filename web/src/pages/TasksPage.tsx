@@ -21,6 +21,7 @@ import {
   Th,
   Toast,
 } from '../components/ui'
+import { useClampPage, useDebounced, useRequestSeq } from '../lib/async'
 
 function formatTime(v?: string) {
   if (!v) return '-'
@@ -46,37 +47,50 @@ export function TasksPage() {
   const [err, setErr] = useState('')
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
+  // 筛选条件未变时，「查询」按钮靠它强制重跑，避免按钮自己发一次请求
+  const [reloadTick, setReloadTick] = useState(0)
   const pageSize = 20
+  const seq = useRequestSeq()
+
+  const keywordQ = useDebounced(keyword)
+  const bizSceneQ = useDebounced(bizScene)
+  const channelQ = useDebounced(channel)
+  const createdByQ = useDebounced(createdBy)
 
   const load = useCallback(async () => {
+    const s = seq.next()
     setBusy(true)
     setErr('')
     try {
       const res = await api.listCampaigns({
         status,
-        keyword: keyword.trim() || undefined,
-        biz_scene: bizScene.trim() || undefined,
-        channel: channel.trim() || undefined,
+        keyword: keywordQ.trim() || undefined,
+        biz_scene: bizSceneQ.trim() || undefined,
+        channel: channelQ.trim() || undefined,
         priority: priority.trim() || undefined,
-        created_by: createdBy.trim() || undefined,
+        created_by: createdByQ.trim() || undefined,
         page,
         page_size: pageSize,
       })
+      if (!seq.isLatest(s)) return
       setItems(res.items ?? [])
       setTotal(res.total ?? 0)
       setSelected([])
     } catch (e) {
+      if (!seq.isLatest(s)) return
       setErr(e instanceof ApiError ? e.message : '加载任务列表失败')
     } finally {
-      setBusy(false)
+      if (seq.isLatest(s)) setBusy(false)
     }
-  }, [bizScene, channel, createdBy, keyword, page, priority, status])
+  }, [bizSceneQ, channelQ, createdByQ, keywordQ, page, priority, seq, status])
 
   useEffect(() => {
     void load()
-  }, [load])
+  }, [load, reloadTick])
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
+
+  useClampPage(page, total, pageSize, setPage)
 
   function toggle(id: number) {
     setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
@@ -161,10 +175,24 @@ export function TasksPage() {
             </Select>
           </Field>
           <Field label="业务场景" noMargin className="min-w-[9rem] flex-[1_1_9rem]">
-            <Input value={bizScene} onChange={(e) => setBizScene(e.target.value)} placeholder="demo" />
+            <Input
+              value={bizScene}
+              onChange={(e) => {
+                setPage(1)
+                setBizScene(e.target.value)
+              }}
+              placeholder="demo"
+            />
           </Field>
           <Field label="渠道" noMargin className="min-w-[9rem] flex-[1_1_9rem]">
-            <Input value={channel} onChange={(e) => setChannel(e.target.value)} placeholder="app_push" />
+            <Input
+              value={channel}
+              onChange={(e) => {
+                setPage(1)
+                setChannel(e.target.value)
+              }}
+              placeholder="app_push"
+            />
           </Field>
           <Field label="优先级" noMargin className="min-w-[8rem] flex-[1_1_8rem]">
             <Select
@@ -180,12 +208,22 @@ export function TasksPage() {
             </Select>
           </Field>
           <Field label="创建人" noMargin className="min-w-[9rem] flex-[1_1_9rem]">
-            <Input value={createdBy} onChange={(e) => setCreatedBy(e.target.value)} placeholder={user?.username || 'admin'} />
+            <Input
+              value={createdBy}
+              onChange={(e) => {
+                setPage(1)
+                setCreatedBy(e.target.value)
+              }}
+              placeholder={user?.username || 'admin'}
+            />
           </Field>
           <Field label="关键词" noMargin className="min-w-[11rem] flex-[1_1_12rem]">
             <Input
               value={keyword}
-              onChange={(e) => setKeyword(e.target.value)}
+              onChange={(e) => {
+                setPage(1)
+                setKeyword(e.target.value)
+              }}
               placeholder="幂等键 / 标题"
             />
           </Field>
@@ -198,7 +236,7 @@ export function TasksPage() {
               disabled={busy}
               onClick={() => {
                 setPage(1)
-                void load()
+                setReloadTick((t) => t + 1)
               }}
             >
               查询

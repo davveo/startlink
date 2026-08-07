@@ -13,6 +13,7 @@ import {
   Panel,
   Toast,
 } from '../components/ui'
+import { useClampPage, useRequestSeq } from '../lib/async'
 import { cn } from '../lib/cn'
 
 function formatTime(v?: string) {
@@ -47,7 +48,10 @@ export function NotificationsPage() {
   const [busy, setBusy] = useState(false)
   const pageSize = 20
 
+  const seq = useRequestSeq()
+
   const load = useCallback(async () => {
+    const s = seq.next()
     setBusy(true)
     setErr('')
     try {
@@ -56,14 +60,16 @@ export function NotificationsPage() {
         page,
         page_size: pageSize,
       })
+      if (!seq.isLatest(s)) return
       setItems(res.items ?? [])
       setTotal(res.total ?? 0)
     } catch (e) {
+      if (!seq.isLatest(s)) return
       setErr(e instanceof ApiError ? e.message : '加载通知失败')
     } finally {
-      setBusy(false)
+      if (seq.isLatest(s)) setBusy(false)
     }
-  }, [page, unreadOnly])
+  }, [page, seq, unreadOnly])
 
   useEffect(() => {
     void load()
@@ -80,7 +86,7 @@ export function NotificationsPage() {
     setErr('')
     try {
       await api.markNotificationRead(id)
-      await load()
+      // 本页已监听该事件并重新拉列表，这里再 load 一次就是重复请求
       window.dispatchEvent(new Event('starlink:notifications-changed'))
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : '标记已读失败')
@@ -96,7 +102,6 @@ export function NotificationsPage() {
     try {
       const res = await api.markAllNotificationsRead()
       setMsg(res.updated > 0 ? `已将 ${res.updated} 条标记为已读` : '没有未读通知')
-      await load()
       window.dispatchEvent(new Event('starlink:notifications-changed'))
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : '全部已读失败')
@@ -106,6 +111,8 @@ export function NotificationsPage() {
   }
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
+
+  useClampPage(page, total, pageSize, setPage)
 
   return (
     <div>

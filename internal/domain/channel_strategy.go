@@ -169,11 +169,11 @@ func SortChannelsByCost(chs []ChannelType, costs map[ChannelType]int) []ChannelT
 	}
 	items := make([]item, len(chs))
 	for i, ch := range chs {
+		// 未在自定义成本表里声明的渠道回落到默认成本，避免只配了部分渠道时
+		// 其余渠道被统一按 100 排到最后。
 		c := 100
-		if costs != nil {
-			if v, ok := costs[ch]; ok {
-				c = v
-			}
+		if v, ok := costs[ch]; ok {
+			c = v
 		} else if v, ok := DefaultChannelCosts[ch]; ok {
 			c = v
 		}

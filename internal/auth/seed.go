@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/starlink/push/internal/domain"
 	"github.com/starlink/push/internal/port"
 	"gopkg.in/yaml.v3"
+	"gorm.io/gorm"
 )
 
 // Seed 顺序：权限目录 → 角色 → 用户；并一次性迁移旧 override。
@@ -92,6 +94,9 @@ type seedAccount struct {
 	Role     string
 }
 
+// seedMinPasswordLen 与 Manager.CreateUser 保持一致，避免 seed 绕过密码强度下限。
+const seedMinPasswordLen = 10
+
 func seedUsersIfEmpty(ctx context.Context, store port.AuthRepository, cfg config.AuthConfig) error {
 	n, err := store.CountUsers(ctx)
 	if err != nil {
@@ -100,27 +105,36 @@ func seedUsersIfEmpty(ctx context.Context, store port.AuthRepository, cfg config
 	if n > 0 {
 		return nil
 	}
-	// 默认内置账号；YAML 可覆盖同名密码/角色
-	defaults := []seedAccount{
-		{Username: "admin", Password: "admin123", Role: RoleAdmin},
-		{Username: "operator", Password: "operator123", Role: RoleOperator},
-		{Username: "viewer", Password: "viewer123", Role: RoleViewer},
-		{Username: "demo", Password: "demo123", Role: RoleViewer},
-	}
 	byName := map[string]seedAccount{}
-	for _, d := range defaults {
-		byName[d.Username] = d
+	if !cfg.Enabled {
+		// 仅在鉴权关闭（单测/紧急排障）时给一组占位账号；启用鉴权时绝不内置任何默认口令
+		for _, d := range []seedAccount{
+			{Username: "admin", Password: "admin12345", Role: RoleAdmin},
+			{Username: "operator", Password: "operator12345", Role: RoleOperator},
+			{Username: "viewer", Password: "viewer12345", Role: RoleViewer},
+		} {
+			byName[d.Username] = d
+		}
 	}
 	for _, u := range cfg.Users {
-		name := strings.TrimSpace(u.Username)
+		name := NormalizeUsername(u.Username)
 		if name == "" || u.Password == "" {
 			continue
+		}
+		if !usernamePattern.MatchString(name) {
+			return fmt.Errorf("auth.users[%s]: 用户名需 2–32 位字母数字._-", u.Username)
+		}
+		if len(u.Password) < seedMinPasswordLen {
+			return fmt.Errorf("auth.users[%s]: 密码至少 %d 位", u.Username, seedMinPasswordLen)
 		}
 		byName[name] = seedAccount{
 			Username: name,
 			Password: u.Password,
 			Role:     NormalizeRole(u.Role),
 		}
+	}
+	if len(byName) == 0 {
+		return fmt.Errorf("auth 已启用但 auth_users 为空且未配置 auth.users，无法创建首个管理员账号")
 	}
 	created := 0
 	for _, u := range byName {
@@ -133,11 +147,11 @@ func seedUsersIfEmpty(ctx context.Context, store port.AuthRepository, cfg config
 			role = RoleViewer
 		}
 		if err := store.CreateUser(ctx, &domain.AuthUser{
-			Username:     u.Username,
-			PasswordHash: hash,
-			PasswordNote: u.Password, // 初始可查看副本
-			Role:         role,
-			Enabled:      true,
+			Username:       u.Username,
+			PasswordHash:   hash,
+			SessionVersion: 1,
+			Role:           role,
+			Enabled:        true,
 		}); err != nil {
 			return err
 		}
@@ -173,16 +187,29 @@ func migrateOverridesOnce(ctx context.Context, store port.AuthRepository, config
 		return nil
 	}
 
+	legacyData, hasLegacy := readOverrideFile(legacyPath)
+	overrideData, hasOverride := readOverrideFile(overridePath)
+	if !hasLegacy && !hasOverride {
+		return nil
+	}
+	// 容器里 configs/ 常是只读卷：标记落不了盘就会每次启动重放 override，
+	// 把管理员在界面上改过的角色权限/用户角色/启用状态静默回滚。此时宁可整段不迁移。
+	if err := os.WriteFile(marker, []byte("migrated\n"), 0o644); err != nil {
+		slog.Error("auth override migrate skipped: 迁移标记不可写，跳过以免每次重启回滚线上 RBAC 改动",
+			"marker", marker, "err", err)
+		return fmt.Errorf("write migrate marker %s: %w", marker, err)
+	}
+
 	migrated := false
 	known, _ := store.ListAllPermissionCodes(ctx)
 
-	if data, err := os.ReadFile(legacyPath); err == nil {
+	if hasLegacy {
 		var ov legacyRoleOverrideFile
-		if yaml.Unmarshal(data, &ov) == nil {
+		if yaml.Unmarshal(legacyData, &ov) == nil {
 			for name, role := range ov.Roles {
-				name = strings.TrimSpace(name)
+				name = NormalizeUsername(name)
 				role = NormalizeRole(role)
-				if name == "" {
+				if !validSeedUsername(name) {
 					continue
 				}
 				u, err := store.GetUserByUsername(ctx, name)
@@ -198,9 +225,9 @@ func migrateOverridesOnce(ctx context.Context, store port.AuthRepository, config
 		}
 	}
 
-	if data, err := os.ReadFile(overridePath); err == nil {
+	if hasOverride {
 		var ov authOverrideFile
-		if yaml.Unmarshal(data, &ov) == nil {
+		if yaml.Unmarshal(overrideData, &ov) == nil {
 			for code, def := range ov.RoleDefs {
 				code = strings.TrimSpace(code)
 				if code == "" {
@@ -243,8 +270,8 @@ func migrateOverridesOnce(ctx context.Context, store port.AuthRepository, config
 				migrated = true
 			}
 			for name, u := range ov.Users {
-				name = strings.TrimSpace(name)
-				if name == "" {
+				name = NormalizeUsername(name)
+				if !validSeedUsername(name) {
 					continue
 				}
 				existing, err := store.GetUserByUsername(ctx, name)
@@ -267,27 +294,25 @@ func migrateOverridesOnce(ctx context.Context, store port.AuthRepository, config
 					}
 					plain := u.Password
 					hash := plain
-					note := ""
 					if strings.HasPrefix(plain, "$2") {
-						// 已是 hash，无可查看副本
+						// 已是 hash，直接迁移。
 					} else {
 						h, err := HashPassword(plain)
 						if err != nil {
 							return err
 						}
 						hash = h
-						note = plain
 					}
 					if role == "" {
 						role = RoleViewer
 					}
 					if err := store.CreateUser(ctx, &domain.AuthUser{
-						Username:     name,
-						PasswordHash: hash,
-						PasswordNote: note,
-						DisplayName:  u.DisplayName,
-						Role:         role,
-						Enabled:      en,
+						Username:       name,
+						PasswordHash:   hash,
+						SessionVersion: 1,
+						DisplayName:    u.DisplayName,
+						Role:           role,
+						Enabled:        en,
 					}); err != nil {
 						return err
 					}
@@ -313,7 +338,8 @@ func migrateOverridesOnce(ctx context.Context, store port.AuthRepository, config
 							return err
 						}
 						fields["password_hash"] = hash
-						fields["password_note"] = u.Password
+						fields["password_note"] = ""
+						fields["session_version"] = gorm.Expr("session_version + 1")
 					}
 				}
 				if len(fields) > 0 {
@@ -324,11 +350,26 @@ func migrateOverridesOnce(ctx context.Context, store port.AuthRepository, config
 		}
 	}
 
-	if migrated {
-		_ = os.WriteFile(marker, []byte("migrated\n"), 0o644)
-		slog.Info("auth override migrated into mysql", "marker", marker)
-	}
+	slog.Info("auth override migrate finished", "marker", marker, "changed", migrated)
 	return nil
+}
+
+func readOverrideFile(path string) ([]byte, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, false
+	}
+	return data, true
+}
+
+// validSeedUsername 迁移/seed 路径同样过 usernamePattern：Session payload 以 "|" 分隔，
+// 含 "|" 或超长的用户名建得出来却登不上。
+func validSeedUsername(name string) bool {
+	if !usernamePattern.MatchString(name) {
+		slog.Warn("auth override skipped invalid username", "username", name)
+		return false
+	}
+	return true
 }
 
 func dirOf(path string) string {

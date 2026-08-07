@@ -17,8 +17,17 @@ var ErrChannelThrottled = errors.New("channel throttled")
 // ErrMainStatusUnavailable 主任务状态查询失败：fail-closed，留 PEL 待恢复后再发。
 var ErrMainStatusUnavailable = errors.New("main task status unavailable")
 
+// ErrFrequencyUnavailable 营销频控不可判定：fail-closed，留 PEL 待 Redis 恢复。
+var ErrFrequencyUnavailable = errors.New("frequency service unavailable")
+
 // ErrUnsubscribed 用户已退订该渠道（Gateway 终检）。
 var ErrUnsubscribed = errors.New("user unsubscribed")
+
+// ErrUnsubscribeUnavailable 退订状态不可判定：fail-closed，留 PEL 待 Redis 恢复。
+var ErrUnsubscribeUnavailable = errors.New("unsubscribe service unavailable")
+
+// ErrCampaignExpired 活动已过期：拆分/入队阶段短路，不再产生无效写入。
+var ErrCampaignExpired = errors.New("campaign expired")
 
 // ErrAudiencePageStuck 人群分页游标未前进或 HasMore 无 token，防止死循环。
 var ErrAudiencePageStuck = errors.New("audience page cursor stuck")

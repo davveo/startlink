@@ -21,6 +21,7 @@ import {
   Stat,
   Toast,
 } from '../components/ui'
+import { useRequestSeq } from '../lib/async'
 import { channelLabel, channelModeLabel, priorityLabel } from '../lib/labels'
 
 export function ProgressPage() {
@@ -34,6 +35,8 @@ export function ProgressPage() {
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
   const [autoRefresh, setAutoRefresh] = useState(true)
+  // 轮询、手动刷新、暂停/恢复等操作都写同一个 progress，用序号保证只有最后发起的那次生效
+  const seq = useRequestSeq()
 
   const fetchProgress = useCallback(async (q: string) => {
     const value = q.trim()
@@ -49,70 +52,89 @@ export function ProgressPage() {
     if (!q) return
     setLookup(q)
     let cancelled = false
+    const s = seq.next()
     setBusy(true)
     setErr('')
     void (async () => {
       try {
         const p = await fetchProgress(q)
-        if (cancelled || !p) return
+        if (cancelled || !seq.isLatest(s) || !p) return
         setProgress(p)
         if (!taskParam || taskParam !== String(p.task_id)) {
           setSearchParams({ task: String(p.task_id) }, { replace: true })
         }
       } catch (e) {
-        if (cancelled) return
+        if (cancelled || !seq.isLatest(s)) return
         setProgress(null)
         setErr(e instanceof ApiError ? e.message : '查询失败')
       } finally {
-        if (!cancelled) setBusy(false)
+        if (!cancelled && seq.isLatest(s)) setBusy(false)
       }
     })()
     return () => {
       cancelled = true
     }
-  }, [taskParam, bizParam, fetchProgress, setSearchParams])
+  }, [taskParam, bizParam, fetchProgress, setSearchParams, seq])
 
+  const activeTaskId = progress?.task_id
+  const finished = progress?.finished ?? false
+
+  // 只依赖任务号与终态，避免 progress 每次新引用导致定时器每 2 秒重建
   useEffect(() => {
-    if (!autoRefresh || !progress || progress.finished) return
+    if (!autoRefresh || !activeTaskId || finished) return
+    let cancelled = false
     const timer = window.setInterval(() => {
+      const s = seq.next()
       void api
-        .getProgress(progress.task_id)
-        .then(setProgress)
+        .getProgress(activeTaskId)
+        .then((p) => {
+          if (cancelled || !seq.isLatest(s)) return
+          setProgress(p)
+        })
         .catch(() => undefined)
     }, 2000)
-    return () => window.clearInterval(timer)
-  }, [autoRefresh, progress])
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [autoRefresh, activeTaskId, finished, seq])
 
   async function onLookup(e: FormEvent) {
     e.preventDefault()
     const q = lookup.trim()
     if (!q) return
+    const s = seq.next()
     setMsg('')
     setErr('')
     setBusy(true)
     try {
       const p = await fetchProgress(q)
-      if (!p) return
+      if (!seq.isLatest(s) || !p) return
       setProgress(p)
       setSearchParams({ task: String(p.task_id) }, { replace: true })
       setMsg('已加载活动进度')
     } catch (e) {
+      if (!seq.isLatest(s)) return
       setProgress(null)
       setErr(e instanceof ApiError ? e.message : '查询失败')
     } finally {
-      setBusy(false)
+      if (seq.isLatest(s)) setBusy(false)
     }
   }
 
   async function runAction(action: () => Promise<unknown>, ok: string) {
     if (!progress) return
+    const taskId = progress.task_id
     setBusy(true)
     setErr('')
     setMsg('')
     try {
       await action()
       setMsg(ok)
-      setProgress(await api.getProgress(progress.task_id))
+      const s = seq.next()
+      const p = await api.getProgress(taskId)
+      if (!seq.isLatest(s)) return
+      setProgress(p)
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : '操作失败')
     } finally {
@@ -195,12 +217,15 @@ export function ProgressPage() {
                 variant="ghost"
                 type="button"
                 disabled={busy}
-                onClick={() =>
+                onClick={() => {
+                  const s = seq.next()
                   void api
                     .getProgress(progress.task_id)
-                    .then(setProgress)
+                    .then((p) => {
+                      if (seq.isLatest(s)) setProgress(p)
+                    })
                     .catch((e) => setErr(e instanceof ApiError ? e.message : '刷新失败'))
-                }
+                }}
               >
                 刷新
               </Button>
