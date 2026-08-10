@@ -203,6 +203,12 @@ func RegisterFromConfig(reg *Registry, channels map[string]config.ChannelSenderC
 		}
 		if mode == "http" && cfg.URL != "" {
 			reg.Register(NewHTTPSender(ch, cfg.URL, cfg.TimeoutSec))
+			slog.Info("channel http sender configured",
+				"channel", ch,
+				"timeout_sec", cfg.TimeoutSec,
+				"max_retry", cfg.MaxRetry,
+				"retry_backoff", cfg.RetryBackoff,
+			)
 		}
 	}
 }

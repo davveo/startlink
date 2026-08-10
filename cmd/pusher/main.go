@@ -60,15 +60,20 @@ func main() {
 		infra.Push,
 		infra.Tasks,
 		infra.Limiter,
-		infra.Cfg.Pusher.RateLimitQPS,
-		infra.Cfg.Pusher.MaxRetry,
-		infra.Cfg.Pusher.DedupTTLSec,
+		infra.Cfg.Pusher,
 		infra.Cfg.Freq,
 		audience.NewUnsubscribeFilter(infra.Redis.RDB(), infra.Cfg.Compliance.UnsubscribeKeyPrefix),
 		preferenceResolver(infra),
 		infra.Cfg.Preference.FailOpen,
 	)
 	gateway.SetTracer(tracer)
+	retryTable := infra.Cfg.Pusher.BuildRetryTable()
+	slog.Info("channel retry policies ready",
+		"default_max_retry", retryTable.Default.MaxRetry,
+		"default_backoff", retryTable.Default.Backoff,
+		"default_timeout", retryTable.Default.Timeout.String(),
+		"channel_overrides", len(retryTable.ByChannel),
+	)
 
 	baseID := "pusher-" + uuid.NewString()[:8]
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

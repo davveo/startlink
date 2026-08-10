@@ -407,7 +407,11 @@ curl -b /tmp/starlink.cookie http://localhost:8080/api/v1/campaigns/biz/campaign
 | `pusher.high_worker_concurrency` | 高优队列并发 handler 数 | `32` | `32` |
 | `pusher.rate_limit_qps` | `channel_quota` 关闭时的遗留全局桶；开启时作 `global_qps` 缺省 | `500` | `500` |
 | `channel_quota.*` | 按渠道×优先级配额；分布式 Redis 桶；反压/准入/429 自适应 | 见 `configs/config.yaml` | 同左 |
-| `pusher.max_retry` | 单次渠道调用的额外重试次数 | `3` | `3` |
+| `pusher.max_retry` | 默认额外重试次数（总尝试 = max_retry+1） | `3` | `3` |
+| `pusher.retry_backoff` | 默认退避曲线：`exponential` / `linear` / `fixed` | `exponential` | 同左 |
+| `pusher.retry_base_ms` / `retry_max_ms` | 退避基数与上限（毫秒） | `50` / `5000` | 同左 |
+| `pusher.timeout_sec` | 默认单次 Send 超时（秒） | `10` | `10` |
+| `pusher.channels.*.max_retry` 等 | 按渠道覆盖重试次数 / 退避 / `timeout_sec` | 可选 | 可选 |
 | `pusher.dedup_ttl_sec` | Redis 成功去重标记 TTL | `604800` | `604800` |
 | `campaign.default_channel` | 结构存在但代码未使用 | 空 | `inbox` |
 | `webhook.enabled` | 是否发送终态回调 | `false` | `true` |
@@ -1206,7 +1210,7 @@ type ChannelSender interface {
 | `req.Vars` | 模板变量（若厂商要模板参数可再映射） |
 | `result.Success` | 是否受理成功 |
 | `result.ProviderID` | **必须**填厂商消息 ID，回执靠它反查流水 |
-| `result.Retryable` | `true` 时 Gateway 会按 `pusher.max_retry` 重试；鉴权错误、号码非法等应 `false` |
+| `result.Retryable` | `true` 时 Gateway 按该渠道的重试策略重试（默认 `pusher.max_retry`，可被 `channels.*` 覆盖）；鉴权错误、号码非法等应 `false` |
 | `error` | 传输层异常；业务失败也可 `Success=false` + `ErrorMsg` |
 
 最小实现骨架：

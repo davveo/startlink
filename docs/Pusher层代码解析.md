@@ -57,7 +57,11 @@ Scheduler：子任务 → MQ.Publish([]PushMessage)  【按 priority 进 high / 
 | `high_worker_concurrency` | high 队列 **并发 handler** 数 | 32 |
 | `rate_limit_qps` | `channel_quota` 关闭时的遗留全局桶；开启时作 `global_qps` 缺省 | 500 |
 | `channel_quota.*` | 按渠道×优先级配额、反压、准入、429 自适应 | 见配置 |
-| `max_retry` | 单渠道发送重试次数上限（额外 attempt） | 3 |
+| `max_retry` | 默认额外重试次数（总尝试 = max_retry+1）；可被 `channels.*.max_retry` 覆盖 | 3 |
+| `retry_backoff` | 默认退避：`exponential` / `linear` / `fixed` | exponential |
+| `retry_base_ms` / `retry_max_ms` | 退避基数与上限 | 50 / 5000 |
+| `timeout_sec` | 默认单次 Send 超时；可被 `channels.*.timeout_sec` 覆盖 | 10 |
+| `channels.*.max_retry` 等 | 按渠道覆盖重试次数、退避、超时 | 可选 |
 | `dedup_ttl_sec` | Redis 成功标记 TTL | 604800（7 天） |
 
 > `channel_quota.distributed=true` 时全集群共享 Redis 桶；`high_reserve_ratio>0` 时 high/normal 分桶。关闭配额时多实例总 QPS ≈ `rate_limit_qps × 实例数`。
@@ -275,14 +279,15 @@ INSERT status=sending
 ### 7.3 `doSend`：渠道调用与重试
 
 ```text
+policy = retries.For(channel)   // 默认 + channels.* 覆盖
 channels.Get(ch) → ChannelSender.Send
-for attempt = 0..maxRetry:
+for attempt = 0..policy.MaxRetry:
   cancelled → 流水 cancelled，return (false, nil)  // Handle 视为「无 error」→ ACK
   paused    → 流水改回 queued，return (false, "paused") → 不 ACK
-  Send(...)
+  Send(WithTimeout(policy.Timeout))
   成功 → break
   !Retryable（且 lastErr==nil）→ break 不再重试
-  else 指数退避 50ms, 100ms, 200ms, ...
+  else policy.BackoffDelay(attempt)  // exponential/linear/fixed，封顶 retry_max_ms
 写流水 sent/failed；成功则 MarkDelivered
 ```
 

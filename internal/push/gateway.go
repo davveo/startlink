@@ -49,7 +49,7 @@ type Gateway struct {
 	prefOpen   bool
 	limiter    port.ChannelLimiter
 	rateQPS    int
-	maxRetry   int
+	retries    config.ChannelRetryTable
 	dedupTTL   int
 	freq       config.FreqConfig
 	tokenMu    sync.Mutex
@@ -67,17 +67,19 @@ func NewGateway(
 	pushRepo port.PushRepository,
 	tasks port.TaskRepository,
 	limiter port.ChannelLimiter,
-	rateQPS, maxRetry, dedupTTLSec int,
+	pusherCfg config.PusherConfig,
 	freq config.FreqConfig,
 	unsub port.UnsubscribeChecker,
 	prefs port.PreferenceResolver,
 	prefFailOpen bool,
 ) *Gateway {
-	if dedupTTLSec <= 0 {
-		dedupTTLSec = 7 * 24 * 3600
-	}
+	rateQPS := pusherCfg.RateLimitQPS
 	if rateQPS <= 0 {
 		rateQPS = 500
+	}
+	dedupTTLSec := pusherCfg.DedupTTLSec
+	if dedupTTLSec <= 0 {
+		dedupTTLSec = 7 * 24 * 3600
 	}
 	return &Gateway{
 		channels:   channels,
@@ -89,7 +91,7 @@ func NewGateway(
 		prefOpen:   prefFailOpen,
 		limiter:    limiter,
 		rateQPS:    rateQPS,
-		maxRetry:   maxRetry,
+		retries:    pusherCfg.BuildRetryTable(),
 		dedupTTL:   dedupTTLSec,
 		freq:       freq,
 		tokens:     float64(rateQPS),
@@ -877,9 +879,15 @@ func (g *Gateway) doSend(ctx context.Context, msg domain.PushMessage, ch domain.
 		Extra:   extra,
 	}
 
+	policy := g.retries.For(ch)
+	maxRetry := policy.MaxRetry
+	if maxRetry < 0 {
+		maxRetry = 0
+	}
+
 	var result *domain.SendResult
 	var lastErr error
-	for attempt := 0; attempt <= g.maxRetry; attempt++ {
+	for attempt := 0; attempt <= maxRetry; attempt++ {
 		// 仅首次与每次 backoff 后刷新状态，避免每 attempt 打库
 		st, _, snapErr := g.loadMainSnap(ctx, msg.MainTaskID, attempt > 0)
 		if snapErr != nil {
@@ -900,7 +908,16 @@ func (g *Gateway) doSend(ctx context.Context, msg domain.PushMessage, ch domain.
 			}
 			return false, domain.ErrMainTaskPaused
 		}
-		result, lastErr = sender.Send(ctx, req)
+
+		sendCtx := ctx
+		var cancel context.CancelFunc
+		if policy.Timeout > 0 {
+			sendCtx, cancel = context.WithTimeout(ctx, policy.Timeout)
+		}
+		result, lastErr = sender.Send(sendCtx, req)
+		if cancel != nil {
+			cancel()
+		}
 		if result != nil && result.Throttled && g.limiter != nil {
 			g.limiter.ObserveVendorThrottle(ctx, ch)
 		}
@@ -910,10 +927,10 @@ func (g *Gateway) doSend(ctx context.Context, msg domain.PushMessage, ch domain.
 		if result != nil && !result.Retryable && lastErr == nil {
 			break
 		}
-		if attempt == g.maxRetry {
+		if attempt == maxRetry {
 			break // 已是最后一次尝试，无需再退避
 		}
-		backoff := time.Duration(1<<attempt) * 50 * time.Millisecond
+		backoff := policy.BackoffDelay(attempt)
 		select {
 		case <-ctx.Done():
 			return false, ctx.Err()

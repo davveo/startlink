@@ -92,11 +92,30 @@ pusher:
   worker_concurrency: 16           # 普通队列（营销）并发
   high_worker_concurrency: 32      # 高优队列（事务）并发
   rate_limit_qps: 500
-  max_retry: 3
+  # 默认重试策略（可被 channels.* 覆盖）
+  max_retry: 3                     # 额外重试次数；总尝试 = max_retry+1
+  retry_backoff: exponential       # exponential | linear | fixed
+  retry_base_ms: 50                # 退避基数
+  retry_max_ms: 5000               # 单次退避上限
+  timeout_sec: 10                  # 单次 Send 超时（秒）
   dedup_ttl_sec: 604800   # 用户+活动+渠道去重标记 TTL（7 天）
   # 渠道发送器：默认 stub；mode=http 时 POST SendRequest JSON → SendResult（含 Retryable）
+  # 可按渠道覆盖 max_retry / retry_backoff / retry_base_ms / retry_max_ms / timeout_sec
   # channels:
-  #   sms: { mode: http, url: "http://127.0.0.1:9091/send/sms", timeout_sec: 5 }
+  #   sms:
+  #     mode: http
+  #     url: "http://127.0.0.1:9091/send/sms"
+  #     timeout_sec: 5
+  #     max_retry: 5
+  #     retry_backoff: exponential
+  #     retry_base_ms: 100
+  #     retry_max_ms: 10000
+  #   inbox:
+  #     mode: stub
+  #     max_retry: 1
+  #     retry_backoff: fixed
+  #     retry_base_ms: 200
+  #     timeout_sec: 2
   #   app_push: { mode: http, url: "http://127.0.0.1:9091/send/app_push" }
   #   wecom: { mode: stub }
   #   dingtalk: { mode: stub }

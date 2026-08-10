@@ -163,10 +163,19 @@ type PusherConfig struct {
 	WorkerConcurrency     int `yaml:"worker_concurrency"`      // 普通队列并发（营销）
 	HighWorkerConcurrency int `yaml:"high_worker_concurrency"` // 高优队列并发（事务）
 	RateLimitQPS          int `yaml:"rate_limit_qps"`
-	MaxRetry              int `yaml:"max_retry"`
+	// MaxRetry 默认额外重试次数（总尝试 = max_retry+1）；可被 channels.*.max_retry 覆盖
+	MaxRetry int `yaml:"max_retry"`
+	// RetryBackoff 默认退避曲线：exponential（默认）| linear | fixed
+	RetryBackoff string `yaml:"retry_backoff"`
+	// RetryBaseMs 退避基数（毫秒）；exponential/linear/fixed 均以此为底
+	RetryBaseMs int `yaml:"retry_base_ms"`
+	// RetryMaxMs 单次退避上限（毫秒）
+	RetryMaxMs int `yaml:"retry_max_ms"`
+	// TimeoutSec 默认单次 Send 超时（秒）；可被 channels.*.timeout_sec 覆盖
+	TimeoutSec int `yaml:"timeout_sec"`
 	// DedupTTLSec 用户+活动+渠道去重 Redis 标记 TTL，默认 7 天
 	DedupTTLSec int `yaml:"dedup_ttl_sec"`
-	// Channels 各渠道发送器：mode=stub|http；http 时 POST JSON SendRequest → SendResult
+	// Channels 各渠道发送器：mode=stub|http；可覆盖重试/退避/超时
 	Channels map[string]ChannelSenderConfig `yaml:"channels"`
 }
 
@@ -174,6 +183,12 @@ type ChannelSenderConfig struct {
 	Mode       string `yaml:"mode"` // stub（默认）| http
 	URL        string `yaml:"url"`
 	TimeoutSec int    `yaml:"timeout_sec"`
+	// MaxRetry 覆盖全局 max_retry；nil=沿用全局
+	MaxRetry *int `yaml:"max_retry"`
+	// RetryBackoff 覆盖全局退避曲线
+	RetryBackoff string `yaml:"retry_backoff"`
+	RetryBaseMs  int    `yaml:"retry_base_ms"`
+	RetryMaxMs   int    `yaml:"retry_max_ms"`
 }
 
 type CampaignConfig struct {
@@ -420,6 +435,18 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Pusher.MaxRetry <= 0 {
 		c.Pusher.MaxRetry = 3
+	}
+	if c.Pusher.RetryBackoff == "" {
+		c.Pusher.RetryBackoff = RetryBackoffExponential
+	}
+	if c.Pusher.RetryBaseMs <= 0 {
+		c.Pusher.RetryBaseMs = 50
+	}
+	if c.Pusher.RetryMaxMs <= 0 {
+		c.Pusher.RetryMaxMs = 5000
+	}
+	if c.Pusher.TimeoutSec <= 0 {
+		c.Pusher.TimeoutSec = 10
 	}
 	if c.Pusher.DedupTTLSec <= 0 {
 		c.Pusher.DedupTTLSec = 7 * 24 * 3600

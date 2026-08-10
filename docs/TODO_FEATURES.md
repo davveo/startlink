@@ -127,9 +127,9 @@
 - [ ] **熔断与重试预算**
   - 现状：MQ `max_delivery`、Gateway `max_retry`、Webhook 3 次各自独立，无全局预算；渠道故障只有线性重试，无熔断
   - 要做：上游调用（Audience / Channel / Webhook）加熔断与统一重试预算
-- [ ] **按渠道重试策略**
-  - 现状：全局 `maxRetry` 应用于所有渠道（`cmd/pusher/main.go`、`internal/push/gateway.go`）
-  - 要做：重试次数、退避曲线、超时按渠道独立配置
+- [x] **按渠道重试策略**
+  - 已做：`pusher.max_retry` / `retry_backoff` / `retry_base_ms` / `retry_max_ms` / `timeout_sec` 为默认；`pusher.channels.*` 可覆盖（`internal/config/retry.go`、`Gateway.doSend`）
+  - 退避曲线：`exponential`（默认）| `linear` | `fixed`；单次 Send 用渠道超时 `context.WithTimeout`
 
 ### 13. API 文档
 

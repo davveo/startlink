@@ -77,6 +77,10 @@ pusher:
   high_worker_concurrency: 32
   rate_limit_qps: 500
   max_retry: 3
+  retry_backoff: exponential
+  retry_base_ms: 50
+  retry_max_ms: 5000
+  timeout_sec: 10
   dedup_ttl_sec: 604800
 
 campaign:
