@@ -26,6 +26,10 @@ var ErrUnsubscribed = errors.New("user unsubscribed")
 // ErrUnsubscribeUnavailable 退订状态不可判定：fail-closed，留 PEL 待 Redis 恢复。
 var ErrUnsubscribeUnavailable = errors.New("unsubscribe service unavailable")
 
+// ErrPreferenceUnavailable 用户偏好不可判定：与退订同样 fail-closed，
+// 宁可延后也不能给已退订用户发出去。
+var ErrPreferenceUnavailable = errors.New("preference service unavailable")
+
 // ErrCampaignExpired 活动已过期：拆分/入队阶段短路，不再产生无效写入。
 var ErrCampaignExpired = errors.New("campaign expired")
 

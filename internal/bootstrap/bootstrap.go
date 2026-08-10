@@ -10,6 +10,8 @@ import (
 	redisx "github.com/starlink/push/internal/adapter/redis"
 	"github.com/starlink/push/internal/adapter/repo"
 	"github.com/starlink/push/internal/adapter/webhook"
+	"github.com/starlink/push/internal/app/preference"
+	"github.com/starlink/push/internal/app/segment"
 	"github.com/starlink/push/internal/config"
 	"github.com/starlink/push/internal/port"
 	"github.com/starlink/push/pkg/applog"
@@ -33,6 +35,12 @@ type Infra struct {
 	Audience      *audience.Registry
 	Webhook       *webhook.Client
 	Templates     *repo.TemplateRepo
+	// 人群资产化
+	Segments    *segment.Service
+	SegmentRepo *repo.SegmentRepo
+	// 用户偏好中心；PrefResolver 供发送链路查询，Preferences 供运营台读写
+	Preferences  *preference.Service
+	PrefResolver *preference.Resolver
 }
 
 func NewInfra(cfgPath string) (*Infra, error) {
@@ -109,6 +117,13 @@ func NewInfra(cfgPath string) (*Infra, error) {
 		)
 	}
 
+	segmentRepo := repo.NewSegmentRepo(db)
+	suppressionStore := redisx.NewSuppressionStore(rdb.RDB(), cfg.Compliance.BlacklistKey, cfg.Compliance.UnsubscribeKeyPrefix)
+	segmentSvc := segment.NewService(segmentRepo, repo.NewSuppressionRepo(db), suppressionStore, audReg)
+
+	prefRepo := repo.NewPreferenceRepo(db)
+	prefResolver := preference.NewResolver(prefRepo, cfg.Preference.CacheTTL(), cfg.Preference.CacheMaxEntries)
+
 	return &Infra{
 		Cfg:           cfg,
 		DB:            db,
@@ -125,5 +140,9 @@ func NewInfra(cfgPath string) (*Infra, error) {
 		Audience:      audReg,
 		Webhook:       wh,
 		Templates:     repo.NewTemplateRepo(db),
+		Segments:      segmentSvc,
+		SegmentRepo:   segmentRepo,
+		Preferences:   preference.NewService(prefRepo, prefResolver),
+		PrefResolver:  prefResolver,
 	}, nil
 }

@@ -196,6 +196,8 @@ type PushRepository interface {
 	AggregateExperiment(ctx context.Context, mainTaskID uint64) (ExperimentMetrics, error)
 	// CountRecentSends 统计近期非测试流水发送量（成功/失败）
 	CountRecentSends(ctx context.Context, since time.Time) (SendStats, error)
+	// AggregateChannelSLA 按渠道×供应商聚合送达质量（渠道 SLA 看板）
+	AggregateChannelSLA(ctx context.Context, q domain.ChannelSLAQuery) ([]domain.ChannelSLARow, error)
 }
 
 // SendStats 近期发送统计（流水口径）
@@ -322,6 +324,91 @@ type AuthRepository interface {
 
 	// CountEnabledUsersWithPermission 启用且其角色包含指定权限码的用户数
 	CountEnabledUsersWithPermission(ctx context.Context, perm string) (int64, error)
+}
+
+// SegmentRepository 可复用人群段
+type SegmentRepository interface {
+	Create(ctx context.Context, seg *domain.AudienceSegment) error
+	Update(ctx context.Context, code string, fields map[string]any) error
+	GetByCode(ctx context.Context, code string) (*domain.AudienceSegment, error)
+	Delete(ctx context.Context, code string) error
+	List(ctx context.Context, q domain.ListSegmentQuery) ([]domain.AudienceSegment, int64, error)
+	// CountByCode 引用计数：有活动引用的人群段不允许删除
+	CountCampaignRefs(ctx context.Context, code string) (int64, error)
+}
+
+// SuppressionRepository 黑名单 / 退订名单的可管理副本
+type SuppressionRepository interface {
+	// BulkAdd 幂等批量写入，返回新增条数
+	BulkAdd(ctx context.Context, entries []domain.SuppressionEntry) (int64, error)
+	Remove(ctx context.Context, kind domain.SuppressionKind, userID, channel string) (bool, error)
+	List(ctx context.Context, q domain.ListSuppressionQuery) ([]domain.SuppressionEntry, int64, error)
+	CountByKind(ctx context.Context) (map[domain.SuppressionKind]int64, error)
+	// IterAll 全量遍历，用于 Redis 快路径重建
+	IterAll(ctx context.Context, fn func(domain.SuppressionEntry) error) error
+}
+
+// SuppressionStore 发送链路的快路径名单（Redis SET）。
+// DB 是权威副本，本接口负责把变更同步到热路径。
+type SuppressionStore interface {
+	AddBlacklist(ctx context.Context, userIDs []string) error
+	RemoveBlacklist(ctx context.Context, userID string) error
+	AddUnsubscribe(ctx context.Context, channel string, userIDs []string) error
+	RemoveUnsubscribe(ctx context.Context, channel, userID string) error
+}
+
+// PreferenceRepository 用户偏好中心与同意审计
+type PreferenceRepository interface {
+	Get(ctx context.Context, userID string) (*domain.UserPreference, error)
+	// GetMany 批量读取，供拆分阶段一次性过滤整页人群
+	GetMany(ctx context.Context, userIDs []string) (map[string]*domain.UserPreference, error)
+	Upsert(ctx context.Context, pref *domain.UserPreference) error
+	List(ctx context.Context, q domain.ListPreferenceQuery) ([]domain.UserPreference, int64, error)
+	Delete(ctx context.Context, userID string) (bool, error)
+	AppendConsent(ctx context.Context, logs []domain.ConsentLog) error
+	ListConsent(ctx context.Context, q domain.ListConsentLogQuery) ([]domain.ConsentLog, int64, error)
+}
+
+// PreferenceResolver 发送链路读取用户偏好（带本地缓存）。
+// Redis/DB 不可用时应返回 error，由调用方按渠道优先级决定 fail-open/closed。
+type PreferenceResolver interface {
+	Resolve(ctx context.Context, userID string) (*domain.UserPreference, error)
+	Invalidate(userID string)
+}
+
+// ScheduleRepository 周期性活动
+type ScheduleRepository interface {
+	Create(ctx context.Context, s *domain.CampaignSchedule) error
+	Update(ctx context.Context, code string, fields map[string]any) error
+	GetByCode(ctx context.Context, code string) (*domain.CampaignSchedule, error)
+	GetByID(ctx context.Context, id uint64) (*domain.CampaignSchedule, error)
+	Delete(ctx context.Context, code string) error
+	List(ctx context.Context, q domain.ListScheduleQuery) ([]domain.CampaignSchedule, int64, error)
+	// ListDue 列出 next_run_at 已到期且租约空闲的 active 计划
+	ListDue(ctx context.Context, now time.Time, leaseTimeoutSec, limit int) ([]domain.CampaignSchedule, error)
+	// ClaimSchedule 抢占触发租约；ok=false 表示已被其它实例接手
+	ClaimSchedule(ctx context.Context, id uint64, owner string, leaseTimeoutSec int) (ok bool, err error)
+	ReleaseSchedule(ctx context.Context, id uint64) error
+	// MarkTriggered 触发后推进 next_run_at / 计数 / 错误信息
+	MarkTriggered(ctx context.Context, id uint64, runAt time.Time, next *time.Time, success bool, errMsg string) error
+	// CreateRun 写入触发流水；created=false 表示 (schedule_id, planned_at) 已存在，本次应跳过
+	CreateRun(ctx context.Context, run *domain.CampaignScheduleRun) (created bool, err error)
+	UpdateRun(ctx context.Context, id uint64, fields map[string]any) error
+	ListRuns(ctx context.Context, scheduleID uint64, q domain.ListScheduleRunQuery) ([]domain.CampaignScheduleRun, int64, error)
+}
+
+// ChannelHealthTracker 渠道健康度与自动降级。
+// 发送结果实时喂入，Gateway 在选渠道前查询，连续失败的渠道被临时摘除。
+type ChannelHealthTracker interface {
+	Enabled() bool
+	// Observe 记录一次发送结果
+	Observe(ctx context.Context, channel domain.ChannelType, success, throttled bool)
+	// Healthy 是否可投放；tracker 不可用时应返回 true（fail-open，不能因监控挂了停发）
+	Healthy(ctx context.Context, channel domain.ChannelType) bool
+	// Snapshot 全渠道健康快照（运营台展示）
+	Snapshot(ctx context.Context, channels []domain.ChannelType) ([]domain.ChannelHealth, error)
+	// Reset 人工解除降级
+	Reset(ctx context.Context, channel domain.ChannelType) error
 }
 
 // ChannelLimiter 渠道级配额限流（按 channel × priority 分桶；可选全局保护闸）。

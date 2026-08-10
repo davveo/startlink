@@ -44,6 +44,8 @@ type Gateway struct {
 	pushRepo   port.PushRepository
 	tasks      port.TaskRepository
 	unsub      port.UnsubscribeChecker
+	prefs      port.PreferenceResolver
+	prefOpen   bool
 	limiter    port.ChannelLimiter
 	rateQPS    int
 	maxRetry   int
@@ -66,6 +68,8 @@ func NewGateway(
 	rateQPS, maxRetry, dedupTTLSec int,
 	freq config.FreqConfig,
 	unsub port.UnsubscribeChecker,
+	prefs port.PreferenceResolver,
+	prefFailOpen bool,
 ) *Gateway {
 	if dedupTTLSec <= 0 {
 		dedupTTLSec = 7 * 24 * 3600
@@ -79,6 +83,8 @@ func NewGateway(
 		pushRepo:   pushRepo,
 		tasks:      tasks,
 		unsub:      unsub,
+		prefs:      prefs,
+		prefOpen:   prefFailOpen,
 		limiter:    limiter,
 		rateQPS:    rateQPS,
 		maxRetry:   maxRetry,
@@ -214,6 +220,11 @@ func (g *Gateway) Handle(ctx context.Context, msg domain.PushMessage) error {
 	if g.inQuietHours(msg.BizScene, now) {
 		return domain.ErrQuietHours
 	}
+	if quiet, err := g.inUserQuietHours(ctx, msg); err != nil {
+		return err
+	} else if quiet {
+		return domain.ErrQuietHours
+	}
 
 	chs := msg.ResolveSendChannels()
 	mode := msg.EffectiveMode()
@@ -251,6 +262,16 @@ func (g *Gateway) Handle(ctx context.Context, msg domain.PushMessage) error {
 		}
 		return err
 	}
+}
+
+// maxErrMsgLen 与 push_records.error_msg 列宽一致，避免写入被 MySQL 截断报错
+const maxErrMsgLen = 512
+
+func clampErrMsg(s string) string {
+	if len(s) <= maxErrMsgLen {
+		return s
+	}
+	return s[:maxErrMsgLen]
 }
 
 func (g *Gateway) nowInTZ(tz string) time.Time {
@@ -367,6 +388,15 @@ func (g *Gateway) allowFreq(ctx context.Context, msg domain.PushMessage, ch doma
 		{fmt.Sprintf("user:%s:ch:%s", msg.UserID, ch), g.freq.UserChannelLimit, g.freq.UserChannelWindowSec, "user_channel_freq"},
 		{fmt.Sprintf("scene:%s", msg.BizScene), g.freq.SceneLimit, g.freq.SceneWindowSec, "scene_freq"},
 	}
+	// 跨活动营销上限：只约束 normal 优先级，验证码等事务通知不占额度
+	if msg.Priority.Normalize() != domain.PriorityHigh {
+		checks = append(checks, struct {
+			key string
+			lim int
+			win int
+			why string
+		}{fmt.Sprintf("mkt:%s", msg.UserID), g.freq.MarketingLimit, g.freq.MarketingWindowSec, "marketing_cap"})
+	}
 	limits := make([]port.FrequencyLimit, 0, len(checks))
 	for _, c := range checks {
 		if c.lim <= 0 || c.win <= 0 {
@@ -389,26 +419,73 @@ func (g *Gateway) allowFreq(ctx context.Context, msg domain.PushMessage, ch doma
 	return false, "frequency_limit", nil
 }
 
-// checkUnsubscribed 发送前按 user+channel 终检。
-// 已退订 → suppressed；Redis 不可用时营销消息 fail-closed（返回 error 留 PEL），事务消息 fail-open。
+// checkUnsubscribed 发送前按 user+channel 终检，涵盖两个来源：
+// 运营侧的退订名单（Redis 快路径）与用户侧的偏好中心（营销总开关 / 主题 / 渠道）。
+// 已退订 → suppressed；不可判定时营销消息 fail-closed（返回 error 留 PEL），事务消息 fail-open。
 func (g *Gateway) checkUnsubscribed(ctx context.Context, msg domain.PushMessage, ch domain.ChannelType) error {
-	if g.unsub == nil {
-		return nil
-	}
-	ok, err := g.unsub.IsUnsubscribed(ctx, msg.UserID, ch)
-	if err != nil {
-		if msg.Priority.Normalize() == domain.PriorityHigh {
-			slog.Warn("unsubscribe check failed, fail-open for high priority",
-				"user", msg.UserID, "channel", ch, "err", err)
-			return nil
+	if g.unsub != nil {
+		ok, err := g.unsub.IsUnsubscribed(ctx, msg.UserID, ch)
+		if err != nil {
+			if msg.Priority.Normalize() == domain.PriorityHigh {
+				slog.Warn("unsubscribe check failed, fail-open for high priority",
+					"user", msg.UserID, "channel", ch, "err", err)
+			} else {
+				// 与频控一致：不可判定不是失败，包装成 deferred 哨兵留 PEL 等 Redis 恢复
+				return fmt.Errorf("%w: %v", domain.ErrUnsubscribeUnavailable, err)
+			}
+		} else if ok {
+			return fmt.Errorf("%w: unsubscribed from %s", domain.ErrUnsubscribed, ch)
 		}
-		// 与频控一致：不可判定不是失败，包装成 deferred 哨兵留 PEL 等 Redis 恢复
-		return fmt.Errorf("%w: %v", domain.ErrUnsubscribeUnavailable, err)
 	}
-	if ok {
-		return domain.ErrUnsubscribed
+
+	pref, err := g.resolvePreference(ctx, msg)
+	if err != nil {
+		return err
+	}
+	if blocked, reason := pref.Blocks(ch, msg.EffectiveTopic(), msg.Priority.Normalize()); blocked {
+		return fmt.Errorf("%w: %s", domain.ErrUnsubscribed, reason)
 	}
 	return nil
+}
+
+// resolvePreference 读取用户偏好；(nil, nil) 表示无偏好记录，不拦截。
+// 偏好库抖动时：高优先级与显式 fail_open 放行，其余包装成 deferred 哨兵留 PEL。
+func (g *Gateway) resolvePreference(ctx context.Context, msg domain.PushMessage) (*domain.UserPreference, error) {
+	if g.prefs == nil || msg.UserID == "" {
+		return nil, nil
+	}
+	pref, err := g.prefs.Resolve(ctx, msg.UserID)
+	if err != nil {
+		if msg.Priority.Normalize() == domain.PriorityHigh || g.prefOpen {
+			slog.Warn("preference lookup failed, fail-open",
+				"user", msg.UserID, "high_priority", msg.Priority.Normalize() == domain.PriorityHigh, "err", err)
+			return nil, nil
+		}
+		return nil, fmt.Errorf("%w: %v", domain.ErrPreferenceUnavailable, err)
+	}
+	return pref, nil
+}
+
+// inUserQuietHours 用户自定义免打扰窗。与全局 quiet_hours 取并集：任一命中都推迟，
+// 用户设置只会比平台更严，不能用来放宽平台策略。
+func (g *Gateway) inUserQuietHours(ctx context.Context, msg domain.PushMessage) (bool, error) {
+	if msg.Priority.Normalize() == domain.PriorityHigh {
+		return false, nil
+	}
+	pref, err := g.resolvePreference(ctx, msg)
+	if err != nil {
+		return false, err
+	}
+	window, ok := pref.QuietWindow()
+	if !ok {
+		return false, nil
+	}
+	// 用户自带时区优先于活动时区，免打扰对用户才有意义
+	tz := msg.Timezone
+	if pref.Timezone != "" {
+		tz = pref.Timezone
+	}
+	return domain.InQuietHours(window.Start, window.End, g.nowInTZ(tz)), nil
 }
 
 func (g *Gateway) markCancelled(ctx context.Context, msg domain.PushMessage, ch domain.ChannelType, content string) error {
@@ -633,6 +710,7 @@ func isRetryableSendErr(err error) bool {
 	return errors.Is(err, domain.ErrChannelThrottled) ||
 		errors.Is(err, domain.ErrFrequencyUnavailable) ||
 		errors.Is(err, domain.ErrUnsubscribeUnavailable) ||
+		errors.Is(err, domain.ErrPreferenceUnavailable) ||
 		errors.Is(err, domain.ErrMainStatusUnavailable) ||
 		errors.Is(err, context.Canceled) ||
 		errors.Is(err, context.DeadlineExceeded)
@@ -678,8 +756,11 @@ func (g *Gateway) sendOne(ctx context.Context, msg domain.PushMessage, ch domain
 
 		if err := g.checkUnsubscribed(ctx, msg, ch); err != nil {
 			if errors.Is(err, domain.ErrUnsubscribed) {
-				_ = g.pushRepo.UpdateRecordStatus(ctx, recordID, domain.PushStatusSuppressed, "", "unsubscribed")
-				slog.Info("unsubscribe denied", "user", msg.UserID, "channel", ch)
+				// 写入具体原因（名单退订 / 营销总开关 / 主题 / 渠道），否则运营排查时
+				// 只能看到一个「unsubscribed」，分不清是谁在什么维度上拦的
+				reason := clampErrMsg(err.Error())
+				_ = g.pushRepo.UpdateRecordStatus(ctx, recordID, domain.PushStatusSuppressed, "", reason)
+				slog.Info("opt-out denied", "user", msg.UserID, "channel", ch, "reason", reason)
 				return false, errSuppressed
 			}
 			_ = g.pushRepo.UpdateRecordStatus(ctx, recordID, domain.PushStatusQueued, "", err.Error())

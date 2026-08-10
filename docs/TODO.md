@@ -165,15 +165,15 @@
   - 路由：`/settings/roles`、`/settings/permissions`、`/settings/users`
   - API：`/api/v1/rbac/roles|permissions|users`（写操作需 `rbac.manage`）
   - 密码 bcrypt；权限码目录仍以 `internal/auth/rbac.go` 为准
-- [ ] **回执接口鉴权与验签**：防伪造送达/点击；校验时间戳、nonce 和请求摘要
-- [ ] **密钥与凭据管理**：Audience/Channel HTTP 支持 API Key、OAuth/mTLS，敏感配置从 Secret Manager 或环境变量注入
-- [ ] **Webhook 安全与可靠**：URL 白名单（防 SSRF）、签名、失败重试；终态事件 outbox 落库，独立 Worker 重试/死信/手工重放
-- [ ] **服务端 HTTP 防护**：ReadHeader/Read/Write/Idle 超时、请求体上限、并发限制和严格 JSON
+- [x] **回执接口鉴权与验签**：HMAC 签名 + 时间窗 + nonce 防重放（`internal/app/callback/verifier.go`；配置 `callback.*`）
+- [~] **密钥与凭据管理**：已支持 7 个 `STARLINK_*` 环境变量覆盖敏感配置；per-tenant 凭据、Secret Manager 接入与轮换仍待办
+- [~] **Webhook 安全与可靠**：主机白名单（防 SSRF）、签名、并发限制、内存重试已实现（`internal/adapter/webhook/client.go`）；持久化 outbox 仍待办
+- [x] **服务端 HTTP 防护**：ReadHeader/Read/Write/Idle 超时、`max_body_bytes` 请求体上限、严格 JSON 解码（`cmd/api/main.go`、`internal/server/router.go`）
 - [ ] **上游调用韧性**：Audience、Channel、Webhook 增加熔断、重试预算、连接池和请求指标
 - [ ] **独立 DB 迁移**：提供 `cmd/migrate`；三进程不再并发 `AutoMigrate`，业务进程只检查 schema 版本
-- [ ] **Readiness / Liveness 分离**：Readiness 检查 MySQL、Redis、所选 MQ 与必要配置（替代空 `/healthz`）
+- [~] **Readiness / Liveness 分离**：api 已有 `/readyz`（检查 MySQL/Redis/MQ）；scheduler、pusher 仍无探针
 - [ ] **可观测性**：Prometheus（队列积压、PEL、发送成功率、限流拒绝、拆分耗时等）+ OpenTelemetry；结构化日志关联 `trace_id/biz_id/task_id/msg_id`
-- [ ] **审计日志**：保存操作者、租户、请求摘要、前后状态、时间和来源 IP
+- [x] **审计日志**：写操作中间件记录操作者、来源 IP、请求摘要（`internal/server/audit_mw.go`）；租户维度待多租户模型落地后补
 
 ---
 
@@ -205,6 +205,8 @@
 
 | 文档 | 说明 |
 |------|------|
+| [TODO_FEATURES.md](TODO_FEATURES.md) | **尚未建设的功能路线图**（本文件只记已完成整改与工程债） |
+| [user-guide/用户使用手册.md](user-guide/用户使用手册.md) | **运营台用户使用手册**（含界面截图） |
 | [README.md](../README.md) | 已知限制原文与修复建议 |
 | [创建活动主流程.md](创建活动主流程.md) | 创建链路 |
 | [Scheduler层代码解析.md](Scheduler层代码解析.md) | 调度层 |

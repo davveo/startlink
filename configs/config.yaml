@@ -123,11 +123,26 @@ freq:
   user_channel_window_sec: 86400
   scene_limit: 100000
   scene_window_sec: 86400
+  # 跨活动营销频次上限：同一用户在窗口内收到的全部营销消息总数（不含 high 优先级）。
+  # 0 = 不启用，避免升级后突然开始拦截存量投放。
+  marketing_limit: 0
+  marketing_window_sec: 86400
   quiet_hours:
     enabled: false
     start: "22:00"
     end: "08:00"
     scenes: [marketing, demo]
+
+# 用户偏好中心：营销总开关 / 品类订阅 / 用户级免打扰
+preference:
+  enabled: true
+  # 发送链路的进程内缓存 TTL。运营台改偏好后，pusher 最多沿用旧值这么久，
+  # 所以 pusher 侧建议压到 15~30s。
+  cache_ttl_sec: 60
+  cache_max_entries: 50000
+  # 偏好库不可用时是否放行营销消息。默认 false：宁可延后也不给已退订用户发。
+  # high 优先级不受此开关影响，始终放行。
+  fail_open: false
 
 # 黑名单 / 退订（Redis SET）
 compliance:

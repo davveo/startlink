@@ -17,6 +17,14 @@ import (
 	"github.com/starlink/push/internal/push"
 )
 
+// preferenceResolver 偏好中心关闭时返回 nil，Gateway 会完全跳过偏好查询。
+func preferenceResolver(infra *bootstrap.Infra) port.PreferenceResolver {
+	if !infra.Cfg.Preference.IsEnabled() || infra.PrefResolver == nil {
+		return nil
+	}
+	return infra.PrefResolver
+}
+
 func main() {
 	cfgPath := flag.String("config", "configs/config.yaml", "config file path")
 	queueMode := flag.String("queue", "all", "consume queue: all | high | normal")
@@ -38,6 +46,10 @@ func main() {
 		os.Exit(1)
 	}
 
+	if !infra.Cfg.Preference.IsEnabled() {
+		slog.Warn("user preference center disabled; marketing opt-out and per-user quiet hours will not be enforced")
+	}
+
 	gateway := push.NewGateway(
 		infra.Channels,
 		infra.AggCache,
@@ -49,6 +61,8 @@ func main() {
 		infra.Cfg.Pusher.DedupTTLSec,
 		infra.Cfg.Freq,
 		audience.NewUnsubscribeFilter(infra.Redis.RDB(), infra.Cfg.Compliance.UnsubscribeKeyPrefix),
+		preferenceResolver(infra),
+		infra.Cfg.Preference.FailOpen,
 	)
 
 	baseID := "pusher-" + uuid.NewString()[:8]

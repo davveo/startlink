@@ -25,6 +25,7 @@ type Config struct {
 	Audience     AudienceConfig     `yaml:"audience"`
 	Freq         FreqConfig         `yaml:"freq"`
 	Compliance   ComplianceConfig   `yaml:"compliance"`
+	Preference   PreferenceConfig   `yaml:"preference"`
 	ChannelQuota ChannelQuotaConfig `yaml:"channel_quota"`
 }
 
@@ -223,9 +224,39 @@ type FreqConfig struct {
 	UserChannelLimit     int `yaml:"user_channel_limit"`
 	UserChannelWindowSec int `yaml:"user_channel_window_sec"`
 	// 场景维度
-	SceneLimit     int              `yaml:"scene_limit"`
-	SceneWindowSec int              `yaml:"scene_window_sec"`
-	QuietHours     QuietHoursConfig `yaml:"quiet_hours"`
+	SceneLimit     int `yaml:"scene_limit"`
+	SceneWindowSec int `yaml:"scene_window_sec"`
+	// MarketingLimit 跨活动营销频次上限：同一用户在窗口内收到的全部营销消息总数。
+	// 与 UserLimit 的区别是它只统计 normal 优先级，事务通知不占额度。
+	MarketingLimit     int              `yaml:"marketing_limit"`
+	MarketingWindowSec int              `yaml:"marketing_window_sec"`
+	QuietHours         QuietHoursConfig `yaml:"quiet_hours"`
+}
+
+// PreferenceConfig 用户偏好中心
+type PreferenceConfig struct {
+	// Enabled 关闭后发送链路完全跳过偏好查询。
+	// 用指针以区分「未配置」与「显式关闭」：存量配置文件没有这一节，
+	// 若按 bool 零值处理会导致升级后偏好静默失效，已退订用户照发。
+	Enabled *bool `yaml:"enabled"`
+	// CacheTTLSec 发送链路偏好缓存 TTL；跨进程失效靠它兜底，pusher 建议 15~30s
+	CacheTTLSec int `yaml:"cache_ttl_sec"`
+	// CacheMaxEntries 缓存条目上限，防止长跑进程内存无界增长
+	CacheMaxEntries int `yaml:"cache_max_entries"`
+	// FailOpen 偏好库不可用时是否放行营销消息。默认 false：
+	// 宁可漏发也不能给已退订用户发出去，那是合规事故。
+	FailOpen bool `yaml:"fail_open"`
+}
+
+// IsEnabled 未配置时视为启用
+func (c PreferenceConfig) IsEnabled() bool { return c.Enabled == nil || *c.Enabled }
+
+// CacheTTL 偏好缓存 TTL
+func (c PreferenceConfig) CacheTTL() time.Duration {
+	if c.CacheTTLSec <= 0 {
+		return 60 * time.Second
+	}
+	return time.Duration(c.CacheTTLSec) * time.Second
 }
 
 type QuietHoursConfig struct {
@@ -499,6 +530,16 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Freq.SceneWindowSec <= 0 {
 		c.Freq.SceneWindowSec = 86400
+	}
+	// marketing_limit 默认 0 = 不启用跨活动上限，避免升级后突然开始拦截存量投放
+	if c.Freq.MarketingWindowSec <= 0 {
+		c.Freq.MarketingWindowSec = 86400
+	}
+	if c.Preference.CacheTTLSec <= 0 {
+		c.Preference.CacheTTLSec = 60
+	}
+	if c.Preference.CacheMaxEntries <= 0 {
+		c.Preference.CacheMaxEntries = 50000
 	}
 	if c.Compliance.BlacklistKey == "" {
 		c.Compliance.BlacklistKey = "starlink:blacklist"

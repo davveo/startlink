@@ -31,9 +31,16 @@ type Service struct {
 	highBizScenes  []string
 	defaultChannel domain.ChannelType
 	audience       AudienceResolver
+	segments       SegmentLookup
 	channels       *channel.Registry
 	exportDir      string
 	exportSem      chan struct{}
+}
+
+// SegmentLookup 人群段查询；创建活动时把 segment_code 展开为真实的圈人参数。
+// 用窄接口而非直接依赖 segment.Service，避免应用层之间产生循环依赖。
+type SegmentLookup interface {
+	LookupSegment(ctx context.Context, code string) (*domain.AudienceSegment, error)
 }
 
 type Deps struct {
@@ -48,6 +55,7 @@ type Deps struct {
 	HighBizScenes  []string
 	DefaultChannel domain.ChannelType
 	Audience       AudienceResolver
+	Segments       SegmentLookup
 	Channels       *channel.Registry
 	ExportDir      string
 }
@@ -73,10 +81,73 @@ func NewService(deps Deps) *Service {
 		highBizScenes:  deps.HighBizScenes,
 		defaultChannel: deps.DefaultChannel,
 		audience:       deps.Audience,
+		segments:       deps.Segments,
 		channels:       deps.Channels,
 		exportDir:      exportDir,
 		exportSem:      make(chan struct{}, 4),
 	}
+}
+
+// applySegments 展开 segment_code 与校验 exclude_segment_code。
+// 人群段是「引用」而非「快照」：这里把 audience_ref / audience_extra 回填进活动，
+// 使拆分阶段与手工填写的活动走完全相同的路径，也让活动创建后不受人群段后续改动影响。
+func (s *Service) applySegments(ctx context.Context, in *domain.CreateCampaignInput) error {
+	includeCode := strings.TrimSpace(in.SegmentCode)
+	excludeCode := strings.TrimSpace(in.ExcludeSegmentCode)
+	if includeCode == "" && excludeCode == "" {
+		return nil
+	}
+	if s.segments == nil {
+		return errcode.New(50001, "人群段服务未启用，无法使用 segment_code")
+	}
+
+	if includeCode != "" {
+		seg, err := s.segments.LookupSegment(ctx, includeCode)
+		if err != nil {
+			return err
+		}
+		if seg == nil {
+			return errcode.New(40004, "人群段不存在: "+includeCode)
+		}
+		if !seg.Active() {
+			return errcode.New(40001, "人群段已停用: "+includeCode)
+		}
+		if seg.Kind.Normalize() != domain.SegmentKindInclude {
+			return errcode.New(40001, "segment_code 必须引用 include 类型人群段: "+includeCode)
+		}
+		in.AudienceRef = seg.AudienceRef
+		if in.BizScene == "" {
+			in.BizScene = seg.BizScene
+		}
+		// 活动自带的 audience_extra 优先，人群段参数只补空缺，便于同一人群段按活动微调
+		if segExtra := seg.ExtraMap(); len(segExtra) > 0 {
+			merged := make(map[string]any, len(segExtra)+len(in.AudienceExtra))
+			for k, v := range segExtra {
+				merged[k] = v
+			}
+			for k, v := range in.AudienceExtra {
+				merged[k] = v
+			}
+			in.AudienceExtra = merged
+		}
+	}
+
+	if excludeCode != "" {
+		seg, err := s.segments.LookupSegment(ctx, excludeCode)
+		if err != nil {
+			return err
+		}
+		if seg == nil {
+			return errcode.New(40004, "排除名单不存在: "+excludeCode)
+		}
+		if !seg.Active() {
+			return errcode.New(40001, "排除名单已停用: "+excludeCode)
+		}
+		if seg.Kind.Normalize() != domain.SegmentKindExclude {
+			return errcode.New(40001, "exclude_segment_code 必须引用 exclude 类型人群段: "+excludeCode)
+		}
+	}
+	return nil
 }
 
 type CreateResult struct {
@@ -197,6 +268,12 @@ type ProgressView struct {
 }
 
 func (s *Service) Create(ctx context.Context, in domain.CreateCampaignInput) (*CreateResult, error) {
+	if err := s.applySegments(ctx, &in); err != nil {
+		return nil, err
+	}
+	if err := domain.ValidateRampUp(domain.NormalizeRampUp(in.RampUp)); err != nil {
+		return nil, errcode.New(40001, err.Error())
+	}
 	in.ApplyDefaultChannel(s.defaultChannel)
 	primary, chList, mode, err := in.NormalizeChannels()
 	if err != nil {
@@ -298,6 +375,10 @@ func (s *Service) Create(ctx context.Context, in domain.CreateCampaignInput) (*C
 		TemplateLocales:          localesCol,
 		AudienceRef:              in.AudienceRef,
 		AudienceExtra:            string(extra),
+		SegmentCode:              strings.TrimSpace(in.SegmentCode),
+		ExcludeSegmentCode:       strings.TrimSpace(in.ExcludeSegmentCode),
+		Topic:                    strings.TrimSpace(in.Topic),
+		RampUpJSON:               domain.MarshalJSONColumn(domain.NormalizeRampUp(in.RampUp), true),
 		Payload:                  string(payload),
 		WebhookURL:               in.WebhookURL,
 		SendWindowsJSON:          string(windowsJSON),

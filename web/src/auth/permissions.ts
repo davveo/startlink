@@ -6,6 +6,10 @@ export const Perm = {
   MenuNotifications: 'menu.notifications',
   MenuAudit: 'menu.audit',
   MenuSettings: 'menu.settings',
+  MenuSegments: 'menu.segments',
+  MenuPreferences: 'menu.preferences',
+  MenuSchedules: 'menu.schedules',
+  MenuChannels: 'menu.channels',
 
   CampaignCreate: 'campaign.create',
   CampaignUpdate: 'campaign.update',
@@ -19,7 +23,15 @@ export const Perm = {
   CampaignExport: 'campaign.export',
   CampaignPreflight: 'campaign.preflight',
   CampaignDryRun: 'campaign.dry_run',
+  CampaignSimulate: 'campaign.simulate',
   AudienceEstimate: 'audience.estimate',
+
+  SegmentManage: 'segment.manage',
+  SuppressionManage: 'suppression.manage',
+  PreferenceView: 'preference.view',
+  PreferenceManage: 'preference.manage',
+  ScheduleManage: 'schedule.manage',
+  ChannelManage: 'channel.manage',
 
   TemplateCreate: 'template.create',
   TemplateEdit: 'template.edit',

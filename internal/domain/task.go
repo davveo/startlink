@@ -25,15 +25,21 @@ type MainTask struct {
 	TemplateLocales  *string          `gorm:"column:template_locales;type:json" json:"-"`
 	AudienceRef      string           `gorm:"size:128;not null" json:"audience_ref"`
 	AudienceExtra    string           `gorm:"type:json" json:"audience_extra,omitempty"`
-	Payload          string           `gorm:"type:json" json:"payload,omitempty"`
-	TotalCount       int64            `gorm:"not null;default:0" json:"total_count"`
-	SuccessCount     int64            `gorm:"not null;default:0" json:"success_count"`
-	FailCount        int64            `gorm:"not null;default:0" json:"fail_count"`
-	SubTaskTotal     int              `gorm:"not null;default:0" json:"sub_task_total"`
-	SubTaskDone      int              `gorm:"not null;default:0" json:"sub_task_done"`
-	Status           TaskStatus       `gorm:"size:32;not null;index;index:idx_main_schedule,priority:1;default:pending" json:"status"`
-	Version          int64            `gorm:"not null;default:0" json:"version"`
-	WebhookURL       string           `gorm:"size:512" json:"webhook_url,omitempty"`
+	// SegmentCode 引用的人群段 code（人群资产化）；audience_ref 仍是拆分时的真实入参
+	SegmentCode string `gorm:"size:64;index" json:"segment_code,omitempty"`
+	// ExcludeSegmentCode 排除名单人群段 code；拆分时从目标人群中剔除
+	ExcludeSegmentCode string `gorm:"size:64;index" json:"exclude_segment_code,omitempty"`
+	// Topic 订阅主题/品类；空则回退 biz_scene，用于用户偏好中心的按主题退订
+	Topic        string     `gorm:"size:64;index" json:"topic,omitempty"`
+	Payload      string     `gorm:"type:json" json:"payload,omitempty"`
+	TotalCount   int64      `gorm:"not null;default:0" json:"total_count"`
+	SuccessCount int64      `gorm:"not null;default:0" json:"success_count"`
+	FailCount    int64      `gorm:"not null;default:0" json:"fail_count"`
+	SubTaskTotal int        `gorm:"not null;default:0" json:"sub_task_total"`
+	SubTaskDone  int        `gorm:"not null;default:0" json:"sub_task_done"`
+	Status       TaskStatus `gorm:"size:32;not null;index;index:idx_main_schedule,priority:1;default:pending" json:"status"`
+	Version      int64      `gorm:"not null;default:0" json:"version"`
+	WebhookURL   string     `gorm:"size:512" json:"webhook_url,omitempty"`
 	// CreatedBy 业务负责人/创建人（非拆分租约）
 	CreatedBy string `gorm:"size:64;index" json:"created_by,omitempty"`
 	// CopiedFromID 复制来源主任务
@@ -58,6 +64,10 @@ type MainTask struct {
 	ChannelRoutesJSON *string `gorm:"type:json;column:channel_routes" json:"channel_routes,omitempty"`
 	// ChannelCostsJSON 渠道成本（channel_mode=cost_priority），如 {"sms":10,"inbox":1}
 	ChannelCostsJSON *string `gorm:"type:json;column:channel_costs" json:"channel_costs,omitempty"`
+	// RampUpJSON 渐进放量阶梯 [{"after_min":0,"qps":50},...]；配置后覆盖 PaceQPS 的时间曲线
+	RampUpJSON *string `gorm:"type:json;column:ramp_up" json:"ramp_up,omitempty"`
+	// ScheduleID 派生自哪个周期活动；一次性活动为空
+	ScheduleID *uint64 `gorm:"index" json:"schedule_id,omitempty"`
 	// SplitOwner / SplitLeaseAt：拆分租约，防止 pending→running 后崩溃导致永久卡单
 	SplitOwner   string     `gorm:"size:64;index" json:"split_owner,omitempty"`
 	SplitLeaseAt *time.Time `gorm:"index" json:"split_lease_at,omitempty"`
@@ -84,6 +94,22 @@ func (t *MainTask) ChannelCosts() map[ChannelType]int {
 		return nil
 	}
 	return ParseChannelCostsJSON(JSONColumnValue(t.ChannelCostsJSON, ""))
+}
+
+// RampUp 解析渐进放量阶梯
+func (t *MainTask) RampUp() []RampUpStage {
+	if t == nil {
+		return nil
+	}
+	return ParseRampUpJSON(JSONColumnValue(t.RampUpJSON, ""))
+}
+
+// EffectiveTopic 订阅主题；空则回退 biz_scene
+func (t *MainTask) EffectiveTopic() string {
+	if t == nil {
+		return ""
+	}
+	return ResolveTopic(t.Topic, t.BizScene)
 }
 
 // SendWindows 解析分时窗

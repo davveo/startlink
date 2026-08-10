@@ -25,6 +25,11 @@ func Seed(ctx context.Context, store port.AuthRepository, cfg config.AuthConfig,
 	if err := seedRolesIfEmpty(ctx, store); err != nil {
 		return err
 	}
+	// 升级路径：上面两步都是「表为空才播种」，新版本新增的权限码不会被写入既有库。
+	// 不补这一步的话，新功能上线后连 admin 都拿不到权限，只能人工插表。
+	if err := syncBuiltinPermissions(ctx, store); err != nil {
+		return err
+	}
 	if err := seedUsersIfEmpty(ctx, store, cfg); err != nil {
 		return err
 	}
@@ -58,6 +63,89 @@ func seedPermissionsIfEmpty(ctx context.Context, store port.AuthRepository) erro
 	}
 	slog.Info("auth permissions seeded", "count", len(BuiltinPermissionCatalog()))
 	return nil
+}
+
+// syncBuiltinPermissions 把内置权限目录里新增的权限码补进库，并按内置角色定义授予系统角色。
+// 只处理「本次新增」的权限码：既有权限的角色绑定是运营在后台调过的，不能被版本升级重置。
+func syncBuiltinPermissions(ctx context.Context, store port.AuthRepository) error {
+	existing, err := store.ListAllPermissionCodes(ctx)
+	if err != nil {
+		return err
+	}
+	have := make(map[string]struct{}, len(existing))
+	for _, c := range existing {
+		have[c] = struct{}{}
+	}
+
+	added := make(map[string]struct{})
+	for _, meta := range BuiltinPermissionCatalog() {
+		if _, ok := have[meta.Code]; ok {
+			continue
+		}
+		if err := store.CreatePermission(ctx, &domain.AuthPermission{
+			Code:        meta.Code,
+			Name:        meta.Name,
+			GroupName:   meta.Group,
+			Kind:        meta.Kind,
+			Description: meta.Name,
+			IsSystem:    true,
+		}); err != nil {
+			return fmt.Errorf("create permission %s: %w", meta.Code, err)
+		}
+		added[meta.Code] = struct{}{}
+	}
+	if len(added) == 0 {
+		return nil
+	}
+
+	defs := DefaultRoleDefs()
+	roles, err := store.ListRoles(ctx)
+	if err != nil {
+		return err
+	}
+	for _, role := range roles {
+		def, ok := defs[role.Code]
+		if !ok {
+			// 自定义角色不自动获得新权限，交由管理员按需授予
+			continue
+		}
+		grant := make([]string, 0, len(added))
+		for _, code := range def.Permissions {
+			if _, isNew := added[code]; isNew {
+				grant = append(grant, code)
+			}
+		}
+		if len(grant) == 0 {
+			continue
+		}
+		current, err := store.ListRolePermissions(ctx, role.Code)
+		if err != nil {
+			return err
+		}
+		merged := append(append([]string(nil), current...), grant...)
+		if err := store.ReplaceRolePermissions(ctx, role.Code, dedupStrings(merged)); err != nil {
+			return err
+		}
+		slog.Info("granted new builtin permissions to role", "role", role.Code, "added", grant)
+	}
+	slog.Info("builtin permissions synced", "new_codes", len(added))
+	return nil
+}
+
+func dedupStrings(in []string) []string {
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if s == "" {
+			continue
+		}
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	return out
 }
 
 func seedRolesIfEmpty(ctx context.Context, store port.AuthRepository) error {

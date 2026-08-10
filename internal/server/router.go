@@ -20,6 +20,8 @@ type Deps struct {
 	Template     *handler.TemplateHandler
 	Notification *handler.NotificationHandler
 	Audit        *handler.AuditHandler
+	Segment      *handler.SegmentHandler
+	Preference   *handler.PreferenceHandler
 	AuditRepo    port.AuditLogRepository
 	Ready        gin.HandlerFunc
 }
@@ -115,6 +117,30 @@ func New(cfg config.ServerConfig, deps Deps) *gin.Engine {
 				protected.GET("/notifications/unread-count", deps.Notification.UnreadCount)
 				protected.POST("/notifications/read-all", perm(auth.PermNotificationRead), deps.Notification.MarkAllRead)
 				protected.POST("/notifications/:id/read", perm(auth.PermNotificationRead), deps.Notification.MarkRead)
+			}
+
+			// 人群资产：读接口任意登录用户，写操作按权限码
+			if deps.Segment != nil {
+				protected.GET("/segments", deps.Segment.List)
+				protected.GET("/segments/:code", deps.Segment.Get)
+				protected.POST("/segments", perm(auth.PermSegmentManage), deps.Segment.Create)
+				protected.PUT("/segments/:code", perm(auth.PermSegmentManage), deps.Segment.Update)
+				protected.DELETE("/segments/:code", perm(auth.PermSegmentManage), deps.Segment.Delete)
+				protected.POST("/segments/:code/refresh", perm(auth.PermSegmentManage), deps.Segment.Refresh)
+
+				protected.GET("/suppressions", deps.Segment.ListSuppressions)
+				protected.GET("/suppressions/stats", deps.Segment.SuppressionStats)
+				protected.POST("/suppressions", perm(auth.PermSuppressionManage), deps.Segment.AddSuppressions)
+				protected.DELETE("/suppressions", perm(auth.PermSuppressionManage), deps.Segment.RemoveSuppression)
+			}
+
+			// 用户偏好中心：偏好涉及用户个人数据，读也要显式授权
+			if deps.Preference != nil {
+				protected.GET("/preferences", perm(auth.PermPreferenceView), deps.Preference.List)
+				protected.GET("/preferences/:user_id", perm(auth.PermPreferenceView), deps.Preference.Get)
+				protected.PUT("/preferences/:user_id", perm(auth.PermPreferenceManage), deps.Preference.Upsert)
+				protected.DELETE("/preferences/:user_id", perm(auth.PermPreferenceManage), deps.Preference.Delete)
+				protected.GET("/consent-logs", perm(auth.PermPreferenceView), deps.Preference.ListConsent)
 			}
 
 			// 审计日志（查询本身不写审计，因 GET 被中间件跳过）

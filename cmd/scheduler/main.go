@@ -8,8 +8,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/starlink/push/internal/bootstrap"
 	appnotify "github.com/starlink/push/internal/app/notify"
+	"github.com/starlink/push/internal/bootstrap"
 	"github.com/starlink/push/internal/scheduler"
 )
 
@@ -34,6 +34,7 @@ func main() {
 	inbox := appnotify.NewBus(infra.Notifications, nil, infra.Redis.RDB())
 	agg := scheduler.NewAggregator(infra.Tasks, infra.AggCache, infra.Webhook, infra.Push, inbox)
 	splitter := scheduler.NewSplitter(infra.Tasks, infra.Audience, infra.Limiter, infra.Cfg.Scheduler.BatchSize, infra.Push)
+	splitter.SetExcludeResolver(infra.Segments)
 	worker := scheduler.NewWorker(
 		infra.Tasks,
 		infra.MQ,

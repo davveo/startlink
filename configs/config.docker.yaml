@@ -117,6 +117,12 @@ webhook:
   signing_secret: "dev-only-starlink-webhook-secret-change-me-2026"
   max_concurrent: 32
 
+preference:
+  enabled: true
+  cache_ttl_sec: 15
+  cache_max_entries: 50000
+  fail_open: false
+
 callback:
   signature_required: true
   signature_secret: "dev-only-starlink-callback-secret-change-me-2026"

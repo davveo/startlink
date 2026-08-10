@@ -50,6 +50,7 @@ func main() {
 		HighBizScenes:  infra.Cfg.MQ.HighBizScenes,
 		DefaultChannel: domain.ChannelType(infra.Cfg.Campaign.DefaultChannel),
 		Audience:       infra.Audience,
+		Segments:       infra.Segments,
 		Channels:       infra.Channels,
 		ExportDir:      "data/exports",
 	})
@@ -83,6 +84,8 @@ func main() {
 		Template:     handler.NewTemplateHandler(templateSvc),
 		Notification: handler.NewNotificationHandler(notifySvc),
 		Audit:        handler.NewAuditHandler(auditSvc),
+		Segment:      handler.NewSegmentHandler(infra.Segments),
+		Preference:   handler.NewPreferenceHandler(infra.Preferences),
 		AuditRepo:    infra.AuditLogs,
 		Ready: handler.Readiness(
 			sqlDB.PingContext,

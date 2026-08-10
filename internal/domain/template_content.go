@@ -41,6 +41,10 @@ type ChannelContent struct {
 	Title string         `json:"title,omitempty"`
 	Body  string         `json:"body,omitempty"`
 	Extra map[string]any `json:"extra,omitempty"`
+	// ProviderTemplateID 厂商报备模板号（如阿里云短信 SMS_123456）
+	ProviderTemplateID string `json:"provider_template_id,omitempty"`
+	// ProviderSignName 厂商签名（短信）
+	ProviderSignName string `json:"provider_sign_name,omitempty"`
 }
 
 // LocaleContent 某语言下的正文与分渠道内容
@@ -196,6 +200,18 @@ func ResolveChannelContent(ch ChannelType, campaignTitle, rootBody string, conte
 		}
 	}
 	return title, body, extra
+}
+
+// ResolveProviderTemplate 取该渠道的厂商模板号与签名；未配置返回空串
+func ResolveProviderTemplate(ch ChannelType, contents map[string]ChannelContent) (templateID, signName string) {
+	if contents == nil {
+		return "", ""
+	}
+	c, ok := contents[string(ch)]
+	if !ok {
+		return "", ""
+	}
+	return strings.TrimSpace(c.ProviderTemplateID), strings.TrimSpace(c.ProviderSignName)
 }
 
 // ValidateVarsAgainstSchema 按 var_schema 校验；返回补齐默认值后的 vars 与错误列表

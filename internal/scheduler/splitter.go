@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/starlink/push/internal/adapter/audience"
@@ -24,6 +25,7 @@ type Splitter struct {
 	tasks     port.TaskRepository
 	push      port.PushRepository
 	audience  AudienceResolver
+	excluder  ExcludeResolver
 	limiter   port.ChannelLimiter
 	batchSize int
 	maxPages  int
@@ -34,6 +36,15 @@ type Splitter struct {
 type AudienceResolver interface {
 	Resolve(ctx context.Context, query domain.AudienceQuery) (*domain.AudiencePage, error)
 }
+
+// ExcludeResolver 解析排除名单人群段的成员集合
+type ExcludeResolver interface {
+	ResolveExcludeUserIDs(ctx context.Context, code string) (map[string]struct{}, error)
+}
+
+// SetExcludeResolver 注入排除名单解析器；未注入时活动上的 exclude_segment_code 会被拒绝执行，
+// 而不是被静默忽略——静默忽略等于对整个排除名单误发。
+func (s *Splitter) SetExcludeResolver(r ExcludeResolver) { s.excluder = r }
 
 func NewSplitter(tasks port.TaskRepository, audience AudienceResolver, limiter port.ChannelLimiter, batchSize int, push ...port.PushRepository) *Splitter {
 	if batchSize <= 0 {
@@ -69,6 +80,20 @@ func (s *Splitter) Split(ctx context.Context, main *domain.MainTask, owner strin
 	var extra map[string]any
 	if main.AudienceExtra != "" {
 		_ = json.Unmarshal([]byte(main.AudienceExtra), &extra)
+	}
+
+	// 排除名单一次性解析：分页时逐页去查会放大上游压力，也无法保证各页看到同一份名单
+	var excluded map[string]struct{}
+	if code := strings.TrimSpace(main.ExcludeSegmentCode); code != "" {
+		if s.excluder == nil {
+			return fmt.Errorf("main task %d 配置了排除名单 %q，但调度器未注入排除解析器", main.ID, code)
+		}
+		var err error
+		excluded, err = s.excluder.ResolveExcludeUserIDs(ctx, code)
+		if err != nil {
+			return fmt.Errorf("resolve exclude segment %q: %w", code, err)
+		}
+		slog.Info("exclude segment loaded", "main_task_id", main.ID, "segment", code, "size", len(excluded))
 	}
 
 	pageToken := ""
@@ -147,6 +172,9 @@ func (s *Splitter) Split(ctx context.Context, main *domain.MainTask, owner strin
 			var assigns []domain.ExperimentAssignment
 			for _, u := range page.Users {
 				if u.UserID == "" {
+					continue
+				}
+				if _, skip := excluded[u.UserID]; skip {
 					continue
 				}
 				userExtra := u.Extra

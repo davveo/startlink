@@ -49,6 +49,7 @@ type PushMessage struct {
 	Vars             map[string]string         `json:"vars,omitempty"`
 	Extra            map[string]any            `json:"extra,omitempty"` // 活动 payload 透传
 	BizScene         string                    `json:"biz_scene"`
+	Topic            string                    `json:"topic,omitempty"`    // 订阅主题；空则回退 biz_scene
 	Priority         Priority                  `json:"priority,omitempty"` // high | normal，决定投递 Stream
 	Locale           string                    `json:"locale,omitempty"`
 	Timezone         string                    `json:"timezone,omitempty"`
@@ -59,6 +60,9 @@ type PushMessage struct {
 	ChannelCosts     map[ChannelType]int       `json:"channel_costs,omitempty"`
 	CreatedAt        time.Time                 `json:"created_at"`
 }
+
+// EffectiveTopic 订阅主题；空则回退 biz_scene
+func (m PushMessage) EffectiveTopic() string { return ResolveTopic(m.Topic, m.BizScene) }
 
 // EffectiveChannels 解析实际要走的渠道列表
 func (m PushMessage) EffectiveChannels() []ChannelType {
@@ -108,6 +112,11 @@ type SendRequest struct {
 	Content string            `json:"content"`
 	Vars    map[string]string `json:"vars,omitempty"`
 	Extra   map[string]any    `json:"extra,omitempty"`
+	// ProviderTemplateID 厂商侧模板/签名 ID。短信、微信等强监管渠道只接受
+	// 报备过的模板号 + 变量，正文由厂商拼装，因此必须与 Content 一起下发。
+	ProviderTemplateID string `json:"provider_template_id,omitempty"`
+	// ProviderSignName 厂商签名（短信）
+	ProviderSignName string `json:"provider_sign_name,omitempty"`
 }
 
 // SendResult 渠道发送结果
@@ -138,8 +147,10 @@ func MergeExtra(campaign, user map[string]any) map[string]any {
 
 // CreateCampaignInput 创建推送活动的通用入参（应用层 API）
 type CreateCampaignInput struct {
-	BizID         string         `json:"biz_id" binding:"required"`
-	BizScene      string         `json:"biz_scene" binding:"required"`
+	BizID string `json:"biz_id" binding:"required"`
+	// BizScene / AudienceRef 在使用 segment_code 时由服务端从人群段回填，
+	// 故只在未引用人群段时必填；服务端仍会在回填后做一次非空校验。
+	BizScene      string         `json:"biz_scene" binding:"required_without=SegmentCode"`
 	Priority      Priority       `json:"priority,omitempty"` // high=事务通知 normal=营销促销；空则按 biz_scene 映射
 	Title         string         `json:"title" binding:"required"`
 	Channel       ChannelType    `json:"channel"`                        // 主渠道；与 channels 二选一或同时传（channels 优先）
@@ -147,12 +158,18 @@ type CreateCampaignInput struct {
 	ChannelMode   ChannelMode    `json:"channel_mode,omitempty"`         // single|fallback|parallel|all_success|conditional|cost_priority
 	TemplateID    string         `json:"template_id" binding:"required"` // 模板中心 code，须为已审核通过
 	TemplateBody  string         `json:"template_body,omitempty"`        // 已废弃：由模板中心快照填充，传入将被忽略
-	AudienceRef   string         `json:"audience_ref" binding:"required"`
+	AudienceRef   string         `json:"audience_ref" binding:"required_without=SegmentCode"`
 	AudienceExtra map[string]any `json:"audience_extra,omitempty"`
-	Payload       map[string]any `json:"payload,omitempty"`
-	WebhookURL    string         `json:"webhook_url,omitempty"`
-	ScheduledAt   *time.Time     `json:"scheduled_at,omitempty"`
-	ExpireAt      *time.Time     `json:"expire_at,omitempty"`
+	// SegmentCode 引用已沉淀的人群段；填写后由服务端回填 audience_ref / audience_extra
+	SegmentCode string `json:"segment_code,omitempty"`
+	// ExcludeSegmentCode 排除名单人群段，拆分时从目标人群中剔除
+	ExcludeSegmentCode string `json:"exclude_segment_code,omitempty"`
+	// Topic 订阅主题/品类；空则回退 biz_scene
+	Topic       string         `json:"topic,omitempty"`
+	Payload     map[string]any `json:"payload,omitempty"`
+	WebhookURL  string         `json:"webhook_url,omitempty"`
+	ScheduledAt *time.Time     `json:"scheduled_at,omitempty"`
+	ExpireAt    *time.Time     `json:"expire_at,omitempty"`
 	// ExperimentID / Salt / ControlPercent：实验抽样；对照组不发送
 	ExperimentID             string `json:"experiment_id,omitempty"`
 	ExperimentSalt           string `json:"experiment_salt,omitempty"`
@@ -167,6 +184,8 @@ type CreateCampaignInput struct {
 	SendWindows []SendWindow `json:"send_windows,omitempty"`
 	// PaceQPS 本活动投放速率上限（Worker 入队节流）；0 表示不限制
 	PaceQPS int `json:"pace_qps,omitempty"`
+	// RampUp 渐进放量阶梯；配置后按活动运行时长逐级提升入队速率
+	RampUp []RampUpStage `json:"ramp_up,omitempty"`
 	// QuotaPolicy 渠道硬配额超额策略：queue=仍创建并排队；reject=拒绝创建（仅 admission=enforce 渠道生效）
 	QuotaPolicy string `json:"quota_policy,omitempty"`
 	// ExpectedFinishMinutes 期望完成时长（分钟），用于创建准入估算；0 则用渠道配置默认

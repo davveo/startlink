@@ -129,6 +129,7 @@ func isDeferredRequeue(err error) bool {
 		errors.Is(err, domain.ErrChannelThrottled) ||
 		errors.Is(err, domain.ErrFrequencyUnavailable) ||
 		errors.Is(err, domain.ErrUnsubscribeUnavailable) ||
+		errors.Is(err, domain.ErrPreferenceUnavailable) ||
 		errors.Is(err, domain.ErrMainStatusUnavailable)
 }
 

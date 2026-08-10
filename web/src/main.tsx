@@ -10,12 +10,15 @@ import { HomePage } from './pages/HomePage'
 import { LoginPage } from './pages/LoginPage'
 import { NotificationsPage } from './pages/NotificationsPage'
 import { OpsPage } from './pages/OpsPage'
+import { PreferencesPage } from './pages/PreferencesPage'
 import { ProgressPage } from './pages/ProgressPage'
 import { RecordsPage } from './pages/RecordsPage'
+import { SegmentsPage } from './pages/SegmentsPage'
 import { SettingsPermissionsPage } from './pages/SettingsPermissionsPage'
 import { SettingsRolesPage } from './pages/SettingsRolesPage'
 import { SettingsUsersPage } from './pages/SettingsUsersPage'
 import { SubTasksPage } from './pages/SubTasksPage'
+import { SuppressionPage } from './pages/SuppressionPage'
 import { TasksPage } from './pages/TasksPage'
 import { TemplateFormPage } from './pages/TemplateFormPage'
 import { TemplatesPage } from './pages/TemplatesPage'
@@ -39,6 +42,9 @@ createRoot(document.getElementById('root')!).render(
             <Route path="tasks/:id/subtasks" element={<SubTasksPage />} />
             <Route path="progress" element={<ProgressPage />} />
             <Route path="notifications" element={<NotificationsPage />} />
+            <Route path="segments" element={<SegmentsPage />} />
+            <Route path="suppressions" element={<SuppressionPage />} />
+            <Route path="preferences" element={<PreferencesPage />} />
             <Route path="audit-logs" element={<AuditLogsPage />} />
             <Route path="settings/roles" element={<SettingsRolesPage />} />
             <Route path="settings/permissions" element={<SettingsPermissionsPage />} />

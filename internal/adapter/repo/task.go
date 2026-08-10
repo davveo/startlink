@@ -132,6 +132,12 @@ INNER JOIN (
 		&domain.AuthRole{},
 		&domain.AuthRolePermission{},
 		&domain.AuthPermission{},
+		&domain.AudienceSegment{},
+		&domain.SuppressionEntry{},
+		&domain.UserPreference{},
+		&domain.ConsentLog{},
+		&domain.CampaignSchedule{},
+		&domain.CampaignScheduleRun{},
 	); err != nil {
 		return err
 	}
@@ -1453,4 +1459,69 @@ func (r *PushRepo) CountRecentSends(ctx context.Context, since time.Time) (port.
 		return port.SendStats{}, err
 	}
 	return port.SendStats{Total: r0.Total, Success: r0.Success, Failed: r0.Failed}, nil
+}
+
+// AggregateChannelSLA 按渠道×供应商聚合送达质量。
+// 抑制类状态（频控/退订/偏好）单独计数，不参与成功率分母——那是我们主动不发，
+// 混进去会把渠道质量算得虚低。
+func (r *PushRepo) AggregateChannelSLA(ctx context.Context, q domain.ChannelSLAQuery) ([]domain.ChannelSLARow, error) {
+	type row struct {
+		Channel    string
+		Provider   string
+		Total      int64
+		Sent       int64
+		Delivered  int64
+		Clicked    int64
+		Failed     int64
+		Suppressed int64
+		AvgLatency float64
+	}
+	db := r.db.WithContext(ctx).Model(&domain.PushRecord{}).
+		Select(`
+			push_records.channel AS channel,
+			COALESCE(NULLIF(push_records.provider, ''), push_records.channel) AS provider,
+			COUNT(*) AS total,
+			COALESCE(SUM(CASE WHEN push_records.status = 'sent' THEN 1 ELSE 0 END), 0) AS sent,
+			COALESCE(SUM(CASE WHEN push_records.status = 'delivered' THEN 1 ELSE 0 END), 0) AS delivered,
+			COALESCE(SUM(CASE WHEN push_records.status = 'clicked' THEN 1 ELSE 0 END), 0) AS clicked,
+			COALESCE(SUM(CASE WHEN push_records.status = 'failed' THEN 1 ELSE 0 END), 0) AS failed,
+			COALESCE(SUM(CASE WHEN push_records.status IN ('suppressed','unreachable','expired','quota_rejected','cancelled') THEN 1 ELSE 0 END), 0) AS suppressed,
+			COALESCE(AVG(CASE WHEN push_records.sent_at IS NOT NULL THEN TIMESTAMPDIFF(MICROSECOND, push_records.created_at, push_records.sent_at) / 1000 END), 0) AS avg_latency`).
+		Where("push_records.is_test = ?", false)
+
+	if q.Since != nil {
+		db = db.Where("push_records.created_at >= ?", *q.Since)
+	}
+	if q.Until != nil {
+		db = db.Where("push_records.created_at < ?", *q.Until)
+	}
+	if ch := strings.TrimSpace(q.Channel); ch != "" {
+		db = db.Where("push_records.channel = ?", ch)
+	}
+	if scene := strings.TrimSpace(q.BizScene); scene != "" {
+		db = db.Joins("JOIN main_tasks ON main_tasks.id = push_records.main_task_id").
+			Where("main_tasks.biz_scene = ?", scene)
+	}
+
+	var rows []row
+	if err := db.Group("push_records.channel, provider").Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]domain.ChannelSLARow, 0, len(rows))
+	for _, x := range rows {
+		item := domain.ChannelSLARow{
+			Channel:          domain.ChannelType(x.Channel),
+			Provider:         x.Provider,
+			Total:            x.Total,
+			Sent:             x.Sent,
+			Delivered:        x.Delivered,
+			Clicked:          x.Clicked,
+			Failed:           x.Failed,
+			Suppressed:       x.Suppressed,
+			AvgSendLatencyMs: x.AvgLatency,
+		}
+		item.ComputeRates()
+		out = append(out, item)
+	}
+	return out, nil
 }
