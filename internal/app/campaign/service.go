@@ -12,6 +12,7 @@ import (
 
 	"github.com/starlink/push/internal/adapter/channel"
 	"github.com/starlink/push/internal/adapter/webhook"
+	"github.com/starlink/push/internal/app/trace"
 	"github.com/starlink/push/internal/domain"
 	"github.com/starlink/push/internal/port"
 	"github.com/starlink/push/pkg/errcode"
@@ -35,6 +36,7 @@ type Service struct {
 	channels       *channel.Registry
 	exportDir      string
 	exportSem      chan struct{}
+	tracer         *trace.Recorder
 }
 
 // SegmentLookup 人群段查询；创建活动时把 segment_code 展开为真实的圈人参数。
@@ -58,6 +60,7 @@ type Deps struct {
 	Segments       SegmentLookup
 	Channels       *channel.Registry
 	ExportDir      string
+	Tracer         *trace.Recorder
 }
 
 func NewService(deps Deps) *Service {
@@ -85,6 +88,7 @@ func NewService(deps Deps) *Service {
 		channels:       deps.Channels,
 		exportDir:      exportDir,
 		exportSem:      make(chan struct{}, 4),
+		tracer:         deps.Tracer,
 	}
 }
 
@@ -151,14 +155,16 @@ func (s *Service) applySegments(ctx context.Context, in *domain.CreateCampaignIn
 }
 
 type CreateResult struct {
-	TaskID uint64            `json:"task_id"`
-	BizID  string            `json:"biz_id"`
-	Status domain.TaskStatus `json:"status"`
+	TaskID  uint64            `json:"task_id"`
+	BizID   string            `json:"biz_id"`
+	TraceID string            `json:"trace_id,omitempty"`
+	Status  domain.TaskStatus `json:"status"`
 }
 
 type CampaignListItem struct {
 	ID           uint64               `json:"id"`
 	BizID        string               `json:"biz_id"`
+	TraceID      string               `json:"trace_id,omitempty"`
 	BizScene     string               `json:"biz_scene"`
 	Title        string               `json:"title"`
 	Channel      domain.ChannelType   `json:"channel"`
@@ -303,7 +309,7 @@ func (s *Service) Create(ctx context.Context, in domain.CreateCampaignInput) (*C
 		if !campaignRequestMatches(exist, in, primary, chList, mode) {
 			return nil, errcode.Conflict
 		}
-		return &CreateResult{TaskID: exist.ID, BizID: exist.BizID, Status: exist.Status}, nil
+		return &CreateResult{TaskID: exist.ID, BizID: exist.BizID, TraceID: exist.TraceID, Status: exist.Status}, nil
 	}
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
@@ -361,6 +367,7 @@ func (s *Service) Create(ctx context.Context, in domain.CreateCampaignInput) (*C
 
 	task := &domain.MainTask{
 		BizID:                    in.BizID,
+		TraceID:                  domain.NewTraceID(),
 		BizScene:                 in.BizScene,
 		Priority:                 prio,
 		Title:                    in.Title,
@@ -400,11 +407,39 @@ func (s *Service) Create(ctx context.Context, in domain.CreateCampaignInput) (*C
 			if !campaignRequestMatches(exist2, in, primary, chList, mode) {
 				return nil, errcode.Conflict
 			}
-			return &CreateResult{TaskID: exist2.ID, BizID: exist2.BizID, Status: exist2.Status}, nil
+			return &CreateResult{TaskID: exist2.ID, BizID: exist2.BizID, TraceID: exist2.TraceID, Status: exist2.Status}, nil
 		}
 		return nil, err
 	}
-	return &CreateResult{TaskID: task.ID, BizID: task.BizID, Status: task.Status}, nil
+	s.emitCampaign(ctx, task, domain.TraceEventCampaignCreated, "活动已创建", map[string]any{
+		"as_draft": in.AsDraft,
+		"channel":  string(primary),
+		"channels": chList,
+	})
+	return &CreateResult{TaskID: task.ID, BizID: task.BizID, TraceID: task.TraceID, Status: task.Status}, nil
+}
+
+func (s *Service) emitCampaign(ctx context.Context, main *domain.MainTask, event, message string, detail map[string]any) {
+	if s.tracer == nil || main == nil || main.TraceID == "" {
+		return
+	}
+	ev := trace.FromMain(main)
+	ev.Stage = domain.TraceStageCampaign
+	ev.Event = event
+	if message != "" {
+		ev.Message = fmt.Sprintf("主任务 #%d %s", main.ID, message)
+	} else {
+		ev.Message = fmt.Sprintf("主任务 #%d", main.ID)
+	}
+	if detail == nil {
+		detail = map[string]any{}
+	}
+	detail["main_task_id"] = main.ID
+	ev.Detail = detail
+	if event == domain.TraceEventCampaignCancelled {
+		ev.Level = domain.TraceLevelWarn
+	}
+	s.tracer.Emit(ctx, ev)
 }
 
 // campaignRequestMatches 同一 biz_id 的幂等重试须请求摘要一致，否则 Conflict。
@@ -548,6 +583,7 @@ func (s *Service) List(ctx context.Context, q domain.ListCampaignQuery) (*Campai
 		items = append(items, CampaignListItem{
 			ID:           t.ID,
 			BizID:        t.BizID,
+			TraceID:      t.TraceID,
 			BizScene:     t.BizScene,
 			Title:        t.Title,
 			Channel:      t.Channel,
@@ -852,6 +888,9 @@ func (s *Service) Cancel(ctx context.Context, id uint64) (*CancelResult, error) 
 		return nil, err
 	}
 	slog.Info("campaign cancelled", "main_task_id", task.ID, "cancelled_subs", n)
+	s.emitCampaign(ctx, task, domain.TraceEventCampaignCancelled, fmt.Sprintf("活动已取消，连带取消 %d 个子任务", n), map[string]any{
+		"cancelled_subs": n,
+	})
 
 	fresh, _ := s.Get(ctx, id)
 	if fresh != nil {
@@ -882,6 +921,7 @@ func (s *Service) Pause(ctx context.Context, id uint64) (*PauseResult, error) {
 		return nil, errcode.InvalidState
 	}
 	slog.Info("campaign paused", "main_task_id", task.ID)
+	s.emitCampaign(ctx, task, domain.TraceEventCampaignPaused, "活动已暂停", nil)
 	return &PauseResult{TaskID: task.ID, Status: domain.TaskStatusPaused}, nil
 }
 
@@ -907,6 +947,7 @@ func (s *Service) Resume(ctx context.Context, id uint64) (*ResumeResult, error) 
 		status = domain.TaskStatusRunning
 	}
 	slog.Info("campaign resumed", "main_task_id", task.ID, "status", status)
+	s.emitCampaign(ctx, task, domain.TraceEventCampaignResumed, "活动已恢复", map[string]any{"status": string(status)})
 	return &ResumeResult{TaskID: task.ID, Status: status}, nil
 }
 

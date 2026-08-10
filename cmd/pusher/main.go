@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/starlink/push/internal/adapter/audience"
+	apptrace "github.com/starlink/push/internal/app/trace"
 	"github.com/starlink/push/internal/bootstrap"
 	"github.com/starlink/push/internal/port"
 	"github.com/starlink/push/internal/push"
@@ -50,6 +51,9 @@ func main() {
 		slog.Warn("user preference center disabled; marketing opt-out and per-user quiet hours will not be enforced")
 	}
 
+	tracer := apptrace.NewRecorder(infra.Traces, "pusher")
+	defer tracer.Close()
+
 	gateway := push.NewGateway(
 		infra.Channels,
 		infra.AggCache,
@@ -64,6 +68,7 @@ func main() {
 		preferenceResolver(infra),
 		infra.Cfg.Preference.FailOpen,
 	)
+	gateway.SetTracer(tracer)
 
 	baseID := "pusher-" + uuid.NewString()[:8]
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

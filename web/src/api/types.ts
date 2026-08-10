@@ -169,12 +169,14 @@ export type CreateCampaignInput = {
 export type CreateCampaignResult = {
   task_id: number
   biz_id: string
+  trace_id?: string
   status: TaskStatus
 }
 
 export type CampaignListItem = {
   id: number
   biz_id: string
+  trace_id?: string
   biz_scene: string
   title: string
   channel: ChannelType

@@ -22,6 +22,8 @@ import { SuppressionPage } from './pages/SuppressionPage'
 import { TasksPage } from './pages/TasksPage'
 import { TemplateFormPage } from './pages/TemplateFormPage'
 import { TemplatesPage } from './pages/TemplatesPage'
+import { TracesPage } from './pages/TracesPage'
+import { TraceTimelinePage } from './pages/TraceTimelinePage'
 import './styles/global.css'
 
 createRoot(document.getElementById('root')!).render(
@@ -45,6 +47,8 @@ createRoot(document.getElementById('root')!).render(
             <Route path="segments" element={<SegmentsPage />} />
             <Route path="suppressions" element={<SuppressionPage />} />
             <Route path="preferences" element={<PreferencesPage />} />
+            <Route path="traces" element={<TracesPage />} />
+            <Route path="traces/:traceId" element={<TraceTimelinePage />} />
             <Route path="audit-logs" element={<AuditLogsPage />} />
             <Route path="settings/roles" element={<SettingsRolesPage />} />
             <Route path="settings/permissions" element={<SettingsPermissionsPage />} />

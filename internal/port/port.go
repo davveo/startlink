@@ -397,6 +397,19 @@ type ScheduleRepository interface {
 	ListRuns(ctx context.Context, scheduleID uint64, q domain.ListScheduleRunQuery) ([]domain.CampaignScheduleRun, int64, error)
 }
 
+// TraceRepository 全链路事件存储
+type TraceRepository interface {
+	Append(ctx context.Context, ev *domain.TraceEvent) error
+	List(ctx context.Context, q domain.ListTraceQuery) ([]domain.TraceEvent, int64, error)
+	// ListByTraceID 按时间正序返回一条链路的事件（有上限，避免全量拉取）
+	ListByTraceID(ctx context.Context, traceID string, limit int) ([]domain.TraceEvent, error)
+	// StatsByTraceID 聚合计数与分阶段统计，供时间线页头使用
+	StatsByTraceID(ctx context.Context, traceID string) (*domain.TraceStats, error)
+	// Summaries 按 trace_id 聚合列表（最近活跃优先）
+	Summaries(ctx context.Context, q domain.ListTraceQuery) ([]domain.TraceSummary, int64, error)
+	GetMainTaskByTraceID(ctx context.Context, traceID string) (*domain.MainTask, error)
+}
+
 // ChannelHealthTracker 渠道健康度与自动降级。
 // 发送结果实时喂入，Gateway 在选渠道前查询，连续失败的渠道被临时摘除。
 type ChannelHealthTracker interface {

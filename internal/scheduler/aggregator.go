@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/starlink/push/internal/app/trace"
 	"github.com/starlink/push/internal/domain"
 	"github.com/starlink/push/internal/port"
 )
@@ -17,10 +18,28 @@ type Aggregator struct {
 	cache    port.AggregatorCache
 	notifier port.Notifier
 	inbox    port.NotificationRepository
+	tracer   *trace.Recorder
 }
 
 func NewAggregator(tasks port.TaskRepository, cache port.AggregatorCache, notifier port.Notifier, push port.PushRepository, inbox port.NotificationRepository) *Aggregator {
 	return &Aggregator{tasks: tasks, push: push, cache: cache, notifier: notifier, inbox: inbox}
+}
+
+// SetTracer 注入全链路埋点（可选）
+func (a *Aggregator) SetTracer(t *trace.Recorder) { a.tracer = t }
+
+func (a *Aggregator) emit(ctx context.Context, main *domain.MainTask, subTaskID uint64, event, level, message string, detail map[string]any) {
+	if a == nil || a.tracer == nil || main == nil || main.TraceID == "" {
+		return
+	}
+	ev := trace.FromMain(main)
+	ev.Stage = domain.TraceStageAggregator
+	ev.Event = event
+	ev.Level = level
+	ev.Message = message
+	ev.Detail = detail
+	ev.SubTaskID = subTaskID
+	a.tracer.Emit(ctx, ev)
 }
 
 // OnSubFinished 子任务完成后聚合；按 subTaskID 幂等，重复调用不会虚高 done
@@ -70,6 +89,11 @@ func (a *Aggregator) OnSubFinished(ctx context.Context, mainTaskID, subTaskID ui
 	} else if redisDone > done {
 		done = redisDone
 	}
+
+	a.emit(ctx, main, subTaskID, domain.TraceEventSubAggregated, domain.TraceLevelInfo,
+		fmt.Sprintf("主任务 #%d 子任务 #%d 聚合完成 success=%d fail=%d done=%d/%d",
+			main.ID, subTaskID, success, fail, done, main.SubTaskTotal),
+		map[string]any{"success": success, "fail": fail, "done": done, "total": main.SubTaskTotal, "sub_task_id": subTaskID})
 
 	// 暂停中：不推进终态
 	if main.Status == domain.TaskStatusPaused {
@@ -155,6 +179,15 @@ func (a *Aggregator) finalizeIfDone(ctx context.Context, main *domain.MainTask, 
 	}
 	_ = a.refreshUserCounts(ctx, mainTaskID)
 	slog.Info("main task aggregated", "id", mainTaskID, "status", final, "pipeline_success", succTotal, "pipeline_fail", failTotal)
+	level := domain.TraceLevelInfo
+	if final == domain.TaskStatusFailed {
+		level = domain.TraceLevelError
+	} else if final == domain.TaskStatusPartial {
+		level = domain.TraceLevelWarn
+	}
+	a.emit(ctx, main, 0, domain.TraceEventCampaignFinalized, level,
+		fmt.Sprintf("主任务 #%d 终态 %s（入队成功 %d / 失败 %d）", main.ID, final, succTotal, failTotal),
+		map[string]any{"status": string(final), "pipeline_success": succTotal, "pipeline_fail": failTotal})
 	a.notifyFinished(mainTaskID, final)
 	return nil
 }

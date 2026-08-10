@@ -22,6 +22,7 @@ type Deps struct {
 	Audit        *handler.AuditHandler
 	Segment      *handler.SegmentHandler
 	Preference   *handler.PreferenceHandler
+	Trace        *handler.TraceHandler
 	AuditRepo    port.AuditLogRepository
 	Ready        gin.HandlerFunc
 }
@@ -33,7 +34,7 @@ func New(cfg config.ServerConfig, deps Deps) *gin.Engine {
 	gin.EnableJsonDecoderDisallowUnknownFields()
 	gin.EnableJsonDecoderUseNumber()
 	r := gin.New()
-	r.Use(gin.Recovery(), gin.Logger(), bodyLimitMiddleware(cfg.MaxBodyBytes), corsMiddleware(cfg.AllowedOrigins))
+	r.Use(gin.Recovery(), gin.Logger(), RequestIDMiddleware(), bodyLimitMiddleware(cfg.MaxBodyBytes), corsMiddleware(cfg.AllowedOrigins))
 	if deps.AuditRepo != nil {
 		r.Use(AuditMiddleware(deps.AuditRepo))
 	}
@@ -141,6 +142,13 @@ func New(cfg config.ServerConfig, deps Deps) *gin.Engine {
 				protected.PUT("/preferences/:user_id", perm(auth.PermPreferenceManage), deps.Preference.Upsert)
 				protected.DELETE("/preferences/:user_id", perm(auth.PermPreferenceManage), deps.Preference.Delete)
 				protected.GET("/consent-logs", perm(auth.PermPreferenceView), deps.Preference.ListConsent)
+			}
+
+			// 全链路追踪：按 trace_id 查看活动消费路径与异常原因
+			if deps.Trace != nil {
+				protected.GET("/traces", perm(auth.PermTraceView), deps.Trace.List)
+				protected.GET("/traces/:trace_id", perm(auth.PermTraceView), deps.Trace.Get)
+				protected.GET("/trace-events", perm(auth.PermTraceView), deps.Trace.ListEvents)
 			}
 
 			// 审计日志（查询本身不写审计，因 GET 被中间件跳过）

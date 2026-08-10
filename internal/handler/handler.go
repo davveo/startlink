@@ -38,6 +38,9 @@ func (h *CampaignHandler) Create(c *gin.Context) {
 		response.Fail(c, err)
 		return
 	}
+	if res != nil && res.TraceID != "" {
+		c.Header("X-Trace-Id", res.TraceID)
+	}
 	response.OK(c, res)
 }
 

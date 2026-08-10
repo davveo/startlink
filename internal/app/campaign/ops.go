@@ -508,7 +508,9 @@ func (s *Service) Publish(ctx context.Context, id uint64) (*CreateResult, error)
 	}); err != nil {
 		return nil, err
 	}
-	return &CreateResult{TaskID: id, BizID: task.BizID, Status: domain.TaskStatusPending}, nil
+	task.Status = domain.TaskStatusPending
+	s.emitCampaign(ctx, task, domain.TraceEventCampaignPublished, "草稿已发布，等待拆分", nil)
+	return &CreateResult{TaskID: id, BizID: task.BizID, TraceID: task.TraceID, Status: domain.TaskStatusPending}, nil
 }
 
 func (s *Service) UpdateDraft(ctx context.Context, id uint64, in domain.CreateCampaignInput) (*CreateResult, error) {

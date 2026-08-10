@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/starlink/push/internal/adapter/channel"
+	"github.com/starlink/push/internal/app/trace"
 	"github.com/starlink/push/internal/config"
 	"github.com/starlink/push/internal/domain"
 	"github.com/starlink/push/internal/port"
@@ -57,6 +58,7 @@ type Gateway struct {
 
 	mainMu    sync.Mutex
 	mainCache map[uint64]mainCacheEntry
+	tracer    *trace.Recorder
 }
 
 func NewGateway(
@@ -94,6 +96,31 @@ func NewGateway(
 		lastRefill: time.Now(),
 		mainCache:  make(map[uint64]mainCacheEntry),
 	}
+}
+
+// SetTracer 注入全链路埋点（可选）。用户级异常走异步缓冲，fail-open。
+func (g *Gateway) SetTracer(t *trace.Recorder) { g.tracer = t }
+
+func (g *Gateway) emitUser(msg domain.PushMessage, event, level, message string, detail map[string]any) {
+	if g == nil || g.tracer == nil || strings.TrimSpace(msg.TraceID) == "" {
+		return
+	}
+	ev := trace.FromMsg(msg)
+	ev.Stage = domain.TraceStagePusher
+	ev.Event = event
+	ev.Level = level
+	if message != "" && msg.MainTaskID > 0 {
+		ev.Message = fmt.Sprintf("主任务 #%d 子任务 #%d %s", msg.MainTaskID, msg.SubTaskID, message)
+	} else {
+		ev.Message = message
+	}
+	if detail == nil {
+		detail = map[string]any{}
+	}
+	detail["main_task_id"] = msg.MainTaskID
+	detail["sub_task_id"] = msg.SubTaskID
+	ev.Detail = detail
+	g.tracer.EmitAsync(ev)
 }
 
 func (g *Gateway) takeToken() bool {
@@ -202,27 +229,34 @@ func (g *Gateway) Handle(ctx context.Context, msg domain.PushMessage) error {
 	if st == domain.TaskStatusCancelled {
 		slog.Info("skip push: main task cancelled", "main_task_id", msg.MainTaskID, "user", msg.UserID)
 		_ = g.markCancelled(ctx, msg, msg.Channel, msg.Body)
+		g.emitUser(msg, domain.TraceEventPushSuppressed, domain.TraceLevelWarn, "主任务已取消", nil)
 		return nil
 	}
 	if st == domain.TaskStatusPaused {
+		g.emitUser(msg, domain.TraceEventPushDeferred, domain.TraceLevelWarn, "主任务已暂停，稍后重试", nil)
 		return domain.ErrMainTaskPaused
 	}
 
 	if msg.ExpireAt != nil && !msg.ExpireAt.IsZero() && time.Now().After(*msg.ExpireAt) {
-		return g.markExpired(ctx, msg)
+		err := g.markExpired(ctx, msg)
+		g.emitUser(msg, domain.TraceEventPushExpired, domain.TraceLevelWarn, "活动已过期", nil)
+		return err
 	}
 
 	now := g.nowInTZ(msg.Timezone)
 	if len(windows) > 0 && !domain.InSendWindows(windows, now) {
+		g.emitUser(msg, domain.TraceEventPushDeferred, domain.TraceLevelWarn, "不在投放窗口", nil)
 		return domain.ErrOutsideSendWindow
 	}
 
 	if g.inQuietHours(msg.BizScene, now) {
+		g.emitUser(msg, domain.TraceEventPushDeferred, domain.TraceLevelWarn, "全局免打扰时段", nil)
 		return domain.ErrQuietHours
 	}
 	if quiet, err := g.inUserQuietHours(ctx, msg); err != nil {
 		return err
 	} else if quiet {
+		g.emitUser(msg, domain.TraceEventPushDeferred, domain.TraceLevelWarn, "用户免打扰时段", nil)
 		return domain.ErrQuietHours
 	}
 
@@ -728,6 +762,9 @@ func (g *Gateway) sendOne(ctx context.Context, msg domain.PushMessage, ch domain
 				_ = g.pushRepo.UpdateRecordStatus(ctx, recordID, domain.PushStatusFailed, "", renderErr.Error())
 			}
 		}
+		g.emitUser(msg, domain.TraceEventPushFailed, domain.TraceLevelError, renderErr.Error(), map[string]any{
+			"channel": string(ch), "reason": "template_render",
+		})
 		return false, renderErr
 	}
 
@@ -761,6 +798,9 @@ func (g *Gateway) sendOne(ctx context.Context, msg domain.PushMessage, ch domain
 				reason := clampErrMsg(err.Error())
 				_ = g.pushRepo.UpdateRecordStatus(ctx, recordID, domain.PushStatusSuppressed, "", reason)
 				slog.Info("opt-out denied", "user", msg.UserID, "channel", ch, "reason", reason)
+				g.emitUser(msg, domain.TraceEventPushSuppressed, domain.TraceLevelWarn, reason, map[string]any{
+					"channel": string(ch), "record_id": recordID,
+				})
 				return false, errSuppressed
 			}
 			_ = g.pushRepo.UpdateRecordStatus(ctx, recordID, domain.PushStatusQueued, "", err.Error())
@@ -774,12 +814,18 @@ func (g *Gateway) sendOne(ctx context.Context, msg domain.PushMessage, ch domain
 			}
 			_ = g.pushRepo.UpdateRecordStatus(ctx, recordID, domain.PushStatusSuppressed, "", why)
 			slog.Info("freq denied", "user", msg.UserID, "channel", ch, "reason", why)
+			g.emitUser(msg, domain.TraceEventPushSuppressed, domain.TraceLevelWarn, why, map[string]any{
+				"channel": string(ch), "record_id": recordID, "reason": "freq",
+			})
 			return false, errSuppressed
 		}
 
 		// 去重/频控通过后再扣渠道令牌；超时留 PEL，占位改回 queued
 		if err := g.waitToken(ctx, ch, msg.Priority); err != nil {
 			_ = g.pushRepo.UpdateRecordStatus(ctx, recordID, domain.PushStatusQueued, "", "channel throttled")
+			g.emitUser(msg, domain.TraceEventPushThrottled, domain.TraceLevelWarn, "渠道限流，稍后重试", map[string]any{
+				"channel": string(ch), "record_id": recordID,
+			})
 			return false, err
 		}
 		// 限流等待后强刷主任务状态
@@ -907,6 +953,9 @@ func (g *Gateway) doSend(ctx context.Context, msg domain.PushMessage, ch domain.
 		_ = g.cache.MarkDelivered(ctx, msg.MainTaskID, msg.UserID, ch, g.dedupTTL)
 	}
 	if !ok {
+		g.emitUser(msg, domain.TraceEventPushFailed, domain.TraceLevelError, errMsg, map[string]any{
+			"channel": string(ch), "record_id": recordID,
+		})
 		return false, fmt.Errorf("send failed [%s]: %s", ch, errMsg)
 	}
 	return true, nil

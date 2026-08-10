@@ -14,6 +14,7 @@ const navItems = [
   { to: '/segments', label: '人群资产', perm: Perm.MenuSegments },
   { to: '/suppressions', label: '黑名单/退订', perm: Perm.MenuSegments },
   { to: '/preferences', label: '用户偏好', perm: Perm.MenuPreferences },
+  { to: '/traces', label: '全链路日志', perm: Perm.MenuTraces },
   { to: '/audit-logs', label: '审计日志', perm: Perm.MenuAudit },
   { to: '/settings/roles', label: '角色配置', perm: Perm.MenuSettings },
   { to: '/settings/permissions', label: '权限管理', perm: Perm.MenuSettings },

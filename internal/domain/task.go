@@ -8,8 +8,10 @@ import (
 // MainTask 主任务：一次营销推送活动
 type MainTask struct {
 	ID           uint64      `gorm:"primaryKey;autoIncrement" json:"id"`
-	BizID        string      `gorm:"size:64;uniqueIndex;not null" json:"biz_id"`
-	BizScene     string      `gorm:"size:64;index;not null" json:"biz_scene"`
+	BizID string `gorm:"size:64;uniqueIndex;not null" json:"biz_id"`
+	// TraceID 全链路追踪 ID：创建时生成，贯穿拆分/入队/推送/回执；运营台按此查时间线
+	TraceID  string   `gorm:"size:64;index" json:"trace_id,omitempty"`
+	BizScene string   `gorm:"size:64;index;not null" json:"biz_scene"`
 	Priority     Priority    `gorm:"size:16;not null;index;default:normal" json:"priority"` // high=事务通知 normal=营销
 	Title        string      `gorm:"size:256;not null" json:"title"`
 	Channel      ChannelType `gorm:"size:32;not null;index" json:"channel"`

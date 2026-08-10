@@ -9,6 +9,7 @@ import (
 	"syscall"
 
 	appnotify "github.com/starlink/push/internal/app/notify"
+	apptrace "github.com/starlink/push/internal/app/trace"
 	"github.com/starlink/push/internal/bootstrap"
 	"github.com/starlink/push/internal/scheduler"
 )
@@ -32,9 +33,13 @@ func main() {
 	}
 
 	inbox := appnotify.NewBus(infra.Notifications, nil, infra.Redis.RDB())
+	tracer := apptrace.NewRecorder(infra.Traces, "scheduler")
+	defer tracer.Close()
 	agg := scheduler.NewAggregator(infra.Tasks, infra.AggCache, infra.Webhook, infra.Push, inbox)
+	agg.SetTracer(tracer)
 	splitter := scheduler.NewSplitter(infra.Tasks, infra.Audience, infra.Limiter, infra.Cfg.Scheduler.BatchSize, infra.Push)
 	splitter.SetExcludeResolver(infra.Segments)
+	splitter.SetTracer(tracer)
 	worker := scheduler.NewWorker(
 		infra.Tasks,
 		infra.MQ,
@@ -47,6 +52,7 @@ func main() {
 		infra.Cfg.Scheduler.SplitLeaseSec,
 		infra.Cfg.Scheduler.SplitConcurrency,
 	)
+	worker.SetTracer(tracer)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()

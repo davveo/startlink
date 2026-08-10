@@ -26,6 +26,7 @@ type Infra struct {
 	MQ            port.PriorityBroker // 可插拔：redis_stream / rocketmq / memory / 自定义
 	Tasks         *repo.TaskRepo
 	Push          *repo.PushRepo
+	Traces        *repo.TraceRepo
 	Notifications *repo.NotificationRepo
 	AuditLogs     *repo.AuditRepo
 	AuthUsers     *repo.AuthRepo
@@ -131,6 +132,7 @@ func NewInfra(cfgPath string) (*Infra, error) {
 		MQ:            broker,
 		Tasks:         repo.NewTaskRepo(db),
 		Push:          repo.NewPushRepo(db),
+		Traces:        repo.NewTraceRepo(db),
 		Notifications: repo.NewNotificationRepo(db),
 		AuditLogs:     repo.NewAuditRepo(db),
 		AuthUsers:     repo.NewAuthRepo(db),

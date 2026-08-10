@@ -16,6 +16,7 @@ const (
 	PermMenuSettings      = "menu.settings"
 	PermMenuSegments      = "menu.segments"
 	PermMenuPreferences   = "menu.preferences"
+	PermMenuTraces        = "menu.traces"
 	PermMenuSchedules     = "menu.schedules"
 	PermMenuChannels      = "menu.channels"
 
@@ -38,6 +39,7 @@ const (
 	PermSuppressionManage = "suppression.manage"
 	PermPreferenceView    = "preference.view"
 	PermPreferenceManage  = "preference.manage"
+	PermTraceView         = "trace.view"
 	PermScheduleManage    = "schedule.manage"
 	PermChannelManage     = "channel.manage"
 
@@ -84,12 +86,12 @@ type RoleDef struct {
 func AllPermissions() []string {
 	return []string{
 		PermMenuOverview, PermMenuTasks, PermMenuTemplates, PermMenuNotifications, PermMenuAudit, PermMenuSettings,
-		PermMenuSegments, PermMenuPreferences, PermMenuSchedules, PermMenuChannels,
+		PermMenuSegments, PermMenuPreferences, PermMenuTraces, PermMenuSchedules, PermMenuChannels,
 		PermCampaignCreate, PermCampaignUpdate, PermCampaignPublish, PermCampaignCancel,
 		PermCampaignPause, PermCampaignResume, PermCampaignRetry, PermCampaignCopy,
 		PermCampaignBatch, PermCampaignExport, PermCampaignPreflight, PermCampaignDryRun,
 		PermCampaignSimulate, PermAudienceEstimate,
-		PermSegmentManage, PermSuppressionManage, PermPreferenceView, PermPreferenceManage,
+		PermSegmentManage, PermSuppressionManage, PermPreferenceView, PermPreferenceManage, PermTraceView,
 		PermScheduleManage, PermChannelManage,
 		PermTemplateCreate, PermTemplateEdit, PermTemplateDelete, PermTemplateSubmit,
 		PermTemplateApprove, PermTemplateReject, PermTemplateDisable, PermTemplateEnable,
@@ -101,12 +103,12 @@ func AllPermissions() []string {
 func operatorPermissions() []string {
 	return []string{
 		PermMenuOverview, PermMenuTasks, PermMenuTemplates, PermMenuNotifications,
-		PermMenuSegments, PermMenuPreferences, PermMenuSchedules, PermMenuChannels,
+		PermMenuSegments, PermMenuPreferences, PermMenuTraces, PermMenuSchedules, PermMenuChannels,
 		PermCampaignCreate, PermCampaignUpdate, PermCampaignPublish, PermCampaignCancel,
 		PermCampaignPause, PermCampaignResume, PermCampaignRetry, PermCampaignCopy,
 		PermCampaignBatch, PermCampaignExport, PermCampaignPreflight, PermCampaignDryRun,
 		PermCampaignSimulate, PermAudienceEstimate,
-		PermSegmentManage, PermSuppressionManage, PermPreferenceView, PermPreferenceManage,
+		PermSegmentManage, PermSuppressionManage, PermPreferenceView, PermPreferenceManage, PermTraceView,
 		PermScheduleManage, PermChannelManage,
 		PermTemplateCreate, PermTemplateEdit, PermTemplateDelete, PermTemplateSubmit,
 		PermTemplateApprove, PermTemplateReject, PermTemplateDisable, PermTemplateEnable,
@@ -118,7 +120,8 @@ func operatorPermissions() []string {
 func viewerPermissions() []string {
 	return []string{
 		PermMenuOverview, PermMenuTasks, PermMenuTemplates, PermMenuNotifications,
-		PermMenuSegments, PermMenuSchedules, PermMenuChannels,
+		PermMenuSegments, PermMenuTraces, PermMenuSchedules, PermMenuChannels,
+		PermTraceView,
 	}
 }
 
@@ -222,6 +225,7 @@ func BuiltinPermissionCatalog() []PermissionMeta {
 		{PermMenuSettings, "菜单·系统配置（角色/权限/用户）", "菜单", "menu"},
 		{PermMenuSegments, "菜单·人群资产", "菜单", "menu"},
 		{PermMenuPreferences, "菜单·用户偏好", "菜单", "menu"},
+		{PermMenuTraces, "菜单·全链路日志", "菜单", "menu"},
 		{PermMenuSchedules, "菜单·周期活动", "菜单", "menu"},
 		{PermMenuChannels, "菜单·渠道运营", "菜单", "menu"},
 		{PermCampaignCreate, "创建活动", "活动", "action"},
@@ -242,6 +246,7 @@ func BuiltinPermissionCatalog() []PermissionMeta {
 		{PermSuppressionManage, "管理黑名单与退订名单", "人群", "action"},
 		{PermPreferenceView, "查看用户偏好", "偏好", "action"},
 		{PermPreferenceManage, "修改用户偏好", "偏好", "action"},
+		{PermTraceView, "查看全链路日志", "可观测", "action"},
 		{PermScheduleManage, "管理周期活动", "周期活动", "action"},
 		{PermChannelManage, "渠道降级与健康度处置", "渠道", "action"},
 		{PermTemplateCreate, "创建模板", "模板", "action"},

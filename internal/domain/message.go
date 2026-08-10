@@ -36,6 +36,8 @@ type AudiencePage struct {
 // PushMessage MQ 中的单条推送消息
 type PushMessage struct {
 	MsgID            string                    `json:"msg_id"`
+	TraceID          string                    `json:"trace_id,omitempty"` // 活动级全链路 ID，从 MainTask 透传
+	BizID            string                    `json:"biz_id,omitempty"`
 	MainTaskID       uint64                    `json:"main_task_id"`
 	SubTaskID        uint64                    `json:"sub_task_id"`
 	UserID           string                    `json:"user_id"`

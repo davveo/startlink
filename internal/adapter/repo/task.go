@@ -138,6 +138,7 @@ INNER JOIN (
 		&domain.ConsentLog{},
 		&domain.CampaignSchedule{},
 		&domain.CampaignScheduleRun{},
+		&domain.TraceEvent{},
 	); err != nil {
 		return err
 	}
@@ -513,7 +514,12 @@ func (r *TaskRepo) CreateSubTasksWithLease(ctx context.Context, mainTaskID uint6
 		if res.RowsAffected == 0 {
 			return nil
 		}
-		if err := tx.CreateInBatches(tasks, 100).Error; err != nil {
+		// 用指针切片，确保自增主键写回 tasks[i].ID，供拆分埋点带上 sub_task_id
+		ptrs := make([]*domain.SubTask, len(tasks))
+		for i := range tasks {
+			ptrs[i] = &tasks[i]
+		}
+		if err := tx.CreateInBatches(ptrs, 100).Error; err != nil {
 			return err
 		}
 		ok = true

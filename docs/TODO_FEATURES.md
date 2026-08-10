@@ -25,9 +25,14 @@
 - [ ] **OpenTelemetry 链路追踪**
   - 现状：无 otel 依赖；API → Scheduler → Pusher 三进程调用链无法串联
   - 要做：接入 otel SDK，MQ 消息头透传 trace context，使一次活动投递可端到端追踪
-- [ ] **请求 ID 与日志关联**
-  - 现状：`internal/server/router.go` 仅用 `gin.Logger()`；`bootstrap` 调 `applog.Init` 时未设置 `Options.Service`，日志无法区分进程
-  - 要做：`X-Request-Id` 中间件 + 统一日志字段规范（`trace_id` / `biz_id` / `task_id` / `msg_id` / `service`）
+- [x] **业务全链路 trace（混合粒度）**
+  - 已做：创建活动生成 `trace_id`（`tr_*`）落 `main_tasks`；经 Splitter/Worker/`PushMessage`/Gateway/Callback/Aggregator 写入 `trace_events`
+  - 粒度：活动/子任务节点全量；用户级仅失败/抑制/限流/延期/过期等异常（成功靠 `push_records` 下钻）
+  - 查询：`GET /api/v1/traces`、`/traces/:trace_id`、`/trace-events`；运营台「全链路追踪」页；权限 `menu.traces` / `trace.view`
+  - 热路径 fail-open（异步缓冲满则丢弃并打 warn）
+- [x] **请求 ID 中间件**
+  - 已做：`X-Request-Id`（`req_*`）中间件；创建活动响应另写 `X-Trace-Id`（活动级，不等于 request_id）
+  - 待做：统一 slog 字段规范（`trace_id` / `biz_id` / `task_id` / `msg_id` / `service`）与 `applog.Options.Service`
 
 ### 2. 独立数据库迁移
 

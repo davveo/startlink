@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/starlink/push/internal/adapter/audience"
+	"github.com/starlink/push/internal/app/trace"
 	"github.com/starlink/push/internal/domain"
 	"github.com/starlink/push/internal/port"
 	"github.com/starlink/push/pkg/errcode"
@@ -27,6 +28,7 @@ type Splitter struct {
 	audience  AudienceResolver
 	excluder  ExcludeResolver
 	limiter   port.ChannelLimiter
+	tracer    *trace.Recorder
 	batchSize int
 	maxPages  int
 	maxUsers  int64
@@ -45,6 +47,23 @@ type ExcludeResolver interface {
 // SetExcludeResolver 注入排除名单解析器；未注入时活动上的 exclude_segment_code 会被拒绝执行，
 // 而不是被静默忽略——静默忽略等于对整个排除名单误发。
 func (s *Splitter) SetExcludeResolver(r ExcludeResolver) { s.excluder = r }
+
+// SetTracer 注入全链路埋点（可选）
+func (s *Splitter) SetTracer(t *trace.Recorder) { s.tracer = t }
+
+func (s *Splitter) emit(ctx context.Context, main *domain.MainTask, subTaskID uint64, event, level, message string, detail map[string]any) {
+	if s == nil || s.tracer == nil || main == nil || main.TraceID == "" {
+		return
+	}
+	ev := trace.FromMain(main)
+	ev.SubTaskID = subTaskID
+	ev.Stage = domain.TraceStageSplit
+	ev.Event = event
+	ev.Level = level
+	ev.Message = message
+	ev.Detail = detail
+	s.tracer.Emit(ctx, ev)
+}
 
 func NewSplitter(tasks port.TaskRepository, audience AudienceResolver, limiter port.ChannelLimiter, batchSize int, push ...port.PushRepository) *Splitter {
 	if batchSize <= 0 {
@@ -68,7 +87,18 @@ func NewSplitter(tasks port.TaskRepository, audience AudienceResolver, limiter p
 	}
 }
 
-func (s *Splitter) Split(ctx context.Context, main *domain.MainTask, owner string) error {
+func (s *Splitter) Split(ctx context.Context, main *domain.MainTask, owner string) (err error) {
+	s.emit(ctx, main, 0, domain.TraceEventSplitStarted, domain.TraceLevelInfo,
+		fmt.Sprintf("开始拆分人群（主任务 #%d）", main.ID), nil)
+	defer func() {
+		if err != nil {
+			s.emit(ctx, main, 0, domain.TraceEventSplitFailed, domain.TraceLevelError,
+				fmt.Sprintf("主任务 #%d 拆分失败：%s", main.ID, err.Error()), map[string]any{
+					"error": err.Error(),
+				})
+		}
+	}()
+
 	if main.Status == domain.TaskStatusCancelled {
 		return fmt.Errorf("main task %d cancelled", main.ID)
 	}
@@ -281,6 +311,13 @@ func (s *Splitter) Split(ctx context.Context, main *domain.MainTask, owner strin
 			if total > s.maxUsers {
 				return fmt.Errorf("%w: max users %d", domain.ErrAudienceLimitExceeded, s.maxUsers)
 			}
+			subID := uint64(0)
+			if len(batch) > 0 {
+				subID = batch[0].ID
+			}
+			s.emit(ctx, main, subID, domain.TraceEventSplitShard, domain.TraceLevelInfo,
+				fmt.Sprintf("主任务 #%d 分片 #%d 已创建子任务 #%d，本页 %d 人", main.ID, shard, subID, len(ids)),
+				map[string]any{"shard": shard, "sub_task_id": subID, "users": len(ids), "total": total})
 			shard++
 			// 仅更新 total_count；sub_task_total 收尾再写，避免拆分中途被 Claim/聚合终态
 			if err := s.tasks.PatchMainMeta(ctx, main.ID, total, 0); err != nil {
@@ -327,6 +364,9 @@ func (s *Splitter) Split(ctx context.Context, main *domain.MainTask, owner strin
 	_ = s.tasks.ClearSplitLease(ctx, main.ID)
 
 	s.checkOverCapacity(ctx, main, total)
+	s.emit(ctx, main, 0, domain.TraceEventSplitDone, domain.TraceLevelInfo,
+		fmt.Sprintf("主任务 #%d 拆分完成：%d 人 / %d 分片", main.ID, total, shard),
+		map[string]any{"total": total, "shards": shard})
 	return nil
 }
 

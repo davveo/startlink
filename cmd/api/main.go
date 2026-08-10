@@ -15,6 +15,7 @@ import (
 	"github.com/starlink/push/internal/app/campaign"
 	appnotify "github.com/starlink/push/internal/app/notify"
 	apptpl "github.com/starlink/push/internal/app/template"
+	apptrace "github.com/starlink/push/internal/app/trace"
 	"github.com/starlink/push/internal/auth"
 	"github.com/starlink/push/internal/bootstrap"
 	"github.com/starlink/push/internal/domain"
@@ -38,6 +39,9 @@ func main() {
 	defer listenCancel()
 	inbox.ListenRedis(listenCtx)
 
+	tracer := apptrace.NewRecorder(infra.Traces, "api")
+	defer tracer.Close()
+
 	campaignSvc := campaign.NewService(campaign.Deps{
 		Tasks:          infra.Tasks,
 		PushRepo:       infra.Push,
@@ -53,8 +57,11 @@ func main() {
 		Segments:       infra.Segments,
 		Channels:       infra.Channels,
 		ExportDir:      "data/exports",
+		Tracer:         tracer,
 	})
 	callbackSvc := callback.NewService(infra.Push, infra.Tasks)
+	callbackSvc.SetTracer(tracer)
+	traceSvc := apptrace.NewService(infra.Traces)
 	templateSvc := apptpl.NewService(infra.Templates)
 	notifySvc := appnotify.NewService(inbox, notifyHub)
 	auditSvc := audit.NewService(infra.AuditLogs)
@@ -86,6 +93,7 @@ func main() {
 		Audit:        handler.NewAuditHandler(auditSvc),
 		Segment:      handler.NewSegmentHandler(infra.Segments),
 		Preference:   handler.NewPreferenceHandler(infra.Preferences),
+		Trace:        handler.NewTraceHandler(traceSvc),
 		AuditRepo:    infra.AuditLogs,
 		Ready: handler.Readiness(
 			sqlDB.PingContext,

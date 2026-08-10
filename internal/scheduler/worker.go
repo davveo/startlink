@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/starlink/push/internal/app/trace"
 	"github.com/starlink/push/internal/config"
 	"github.com/starlink/push/internal/domain"
 	"github.com/starlink/push/internal/port"
@@ -30,6 +31,7 @@ type Worker struct {
 	claimTimeoutSec  int
 	splitLeaseSec    int
 	splitSem         chan struct{}
+	tracer           *trace.Recorder
 }
 
 func NewWorker(
@@ -70,6 +72,25 @@ func NewWorker(
 }
 
 func (w *Worker) ID() string { return w.id }
+
+// SetTracer 注入全链路埋点（可选）
+func (w *Worker) SetTracer(t *trace.Recorder) { w.tracer = t }
+
+func (w *Worker) emit(ctx context.Context, main *domain.MainTask, st *domain.SubTask, event, level, message string, detail map[string]any) {
+	if w == nil || w.tracer == nil || main == nil || main.TraceID == "" {
+		return
+	}
+	ev := trace.FromMain(main)
+	ev.Stage = domain.TraceStageWorker
+	ev.Event = event
+	ev.Level = level
+	ev.Message = message
+	ev.Detail = detail
+	if st != nil {
+		ev.SubTaskID = st.ID
+	}
+	w.tracer.Emit(ctx, ev)
+}
 
 func (w *Worker) Run(ctx context.Context) error {
 	slog.Info("scheduler worker started",
@@ -266,6 +287,12 @@ func (w *Worker) loopClaim(ctx context.Context, idx int) {
 				slog.Info("skip fail aggregate: lost claim", "sub_id", st.ID, "worker", st.WorkerID)
 				continue
 			}
+			if main, gerr := w.tasks.GetMainTask(ctx, st.MainTaskID); gerr == nil {
+				w.emit(ctx, main, st, domain.TraceEventSubFailed, domain.TraceLevelError,
+					fmt.Sprintf("主任务 #%d 子任务 #%d 失败：%s", main.ID, st.ID, err.Error()), map[string]any{
+						"error": err.Error(), "sub_task_id": st.ID,
+					})
+			}
 			_ = w.agg.OnSubFinished(ctx, st.MainTaskID, st.ID, 0, int64(st.TotalCount))
 		}
 	}
@@ -285,6 +312,12 @@ func (w *Worker) finishExpiredSubTask(ctx context.Context, st *domain.SubTask) e
 	slog.Info("skip subtask: campaign expired", "sub_id", st.ID, "main_id", st.MainTaskID, "users", st.TotalCount)
 	if !updated {
 		return nil
+	}
+	if main, gerr := w.tasks.GetMainTask(ctx, st.MainTaskID); gerr == nil {
+		w.emit(ctx, main, st, domain.TraceEventSubFailed, domain.TraceLevelError,
+			fmt.Sprintf("主任务 #%d 已过期，子任务 #%d 未入队", main.ID, st.ID), map[string]any{
+				"users": st.TotalCount, "sub_task_id": st.ID,
+			})
 	}
 	return w.agg.OnSubFinished(ctx, st.MainTaskID, st.ID, 0, int64(st.TotalCount))
 }
@@ -320,6 +353,8 @@ func (w *Worker) processSubTask(ctx context.Context, st *domain.SubTask) error {
 	if main.Status == domain.TaskStatusCancelled {
 		_, _ = w.tasks.UpdateSubTaskResult(ctx, st.ID, st.WorkerID, 0, 0, domain.TaskStatusCancelled, "main task cancelled")
 		slog.Info("skip subtask: main cancelled", "sub_id", st.ID, "main_id", st.MainTaskID)
+		w.emit(ctx, main, st, domain.TraceEventSubCancelled, domain.TraceLevelWarn,
+			fmt.Sprintf("主任务 #%d 已取消，跳过子任务 #%d", main.ID, st.ID), nil)
 		return errMainCancelled
 	}
 	if main.Status == domain.TaskStatusPaused {
@@ -327,6 +362,10 @@ func (w *Worker) processSubTask(ctx context.Context, st *domain.SubTask) error {
 		slog.Info("release subtask: main paused", "sub_id", st.ID, "main_id", st.MainTaskID)
 		return errMainPaused
 	}
+	w.emit(ctx, main, st, domain.TraceEventSubClaimed, domain.TraceLevelInfo,
+		fmt.Sprintf("主任务 #%d 子任务 #%d 已认领，待入队 %d 人", main.ID, st.ID, st.TotalCount),
+		map[string]any{"users": st.TotalCount, "shard": st.ShardIndex, "sub_task_id": st.ID})
+
 	// 过期活动不再入队：否则每个用户都要在 pusher 侧各写一次流水才标记 expired
 	if isExpired(main) {
 		return w.finishExpiredSubTask(ctx, st)
@@ -388,6 +427,9 @@ func (w *Worker) processSubTask(ctx context.Context, st *domain.SubTask) error {
 			Vars:             vars,
 			Extra:            merged,
 			BizScene:         main.BizScene,
+			Topic:            main.Topic,
+			TraceID:          main.TraceID,
+			BizID:            main.BizID,
 			Priority:         prio,
 			Locale:           locale,
 			Timezone:         tz,
@@ -419,6 +461,9 @@ func (w *Worker) processSubTask(ctx context.Context, st *domain.SubTask) error {
 	if err := w.publishMsgs(ctx, main, st, msgs); err != nil {
 		return err
 	}
+	w.emit(ctx, main, st, domain.TraceEventSubEnqueued, domain.TraceLevelInfo,
+		fmt.Sprintf("主任务 #%d 子任务 #%d 已入队 %d 条推送消息", main.ID, st.ID, len(msgs)),
+		map[string]any{"enqueued": len(msgs), "sub_task_id": st.ID})
 
 	updated, err := w.tasks.UpdateSubTaskResult(ctx, st.ID, st.WorkerID, len(msgs), 0, domain.TaskStatusSuccess, "")
 	if err != nil {

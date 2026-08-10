@@ -8,6 +8,7 @@ export const Perm = {
   MenuSettings: 'menu.settings',
   MenuSegments: 'menu.segments',
   MenuPreferences: 'menu.preferences',
+  MenuTraces: 'menu.traces',
   MenuSchedules: 'menu.schedules',
   MenuChannels: 'menu.channels',
 
@@ -30,6 +31,7 @@ export const Perm = {
   SuppressionManage: 'suppression.manage',
   PreferenceView: 'preference.view',
   PreferenceManage: 'preference.manage',
+  TraceView: 'trace.view',
   ScheduleManage: 'schedule.manage',
   ChannelManage: 'channel.manage',
 
