@@ -120,7 +120,10 @@ func (s *Service) applySegments(ctx context.Context, in *domain.CreateCampaignIn
 			return errcode.New(40001, "segment_code 必须引用 include 类型人群段: "+includeCode)
 		}
 		in.AudienceRef = seg.AudienceRef
-		if in.BizScene == "" {
+		if seg.IsStatic() {
+			// 静态名单必须走 StaticProvider；活动表单若仍带 demo 场景会被 Demo 截胡
+			in.BizScene = domain.BizSceneStatic
+		} else if in.BizScene == "" {
 			in.BizScene = seg.BizScene
 		}
 		// 活动自带的 audience_extra 优先，人群段参数只补空缺，便于同一人群段按活动微调
@@ -133,6 +136,17 @@ func (s *Service) applySegments(ctx context.Context, in *domain.CreateCampaignIn
 				merged[k] = v
 			}
 			in.AudienceExtra = merged
+		} else if seg.IsStatic() && seg.MemberCount > 0 {
+			// 无 extra 时补 total_hint，供配额预检
+			if in.AudienceExtra == nil {
+				in.AudienceExtra = map[string]any{}
+			}
+			if _, ok := in.AudienceExtra["total_hint"]; !ok {
+				in.AudienceExtra["total_hint"] = seg.MemberCount
+			}
+			if _, ok := in.AudienceExtra["total"]; !ok {
+				in.AudienceExtra["total"] = seg.MemberCount
+			}
 		}
 	}
 

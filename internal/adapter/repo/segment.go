@@ -84,6 +84,9 @@ func (r *SegmentRepo) List(ctx context.Context, q domain.ListSegmentQuery) ([]do
 	if q.Kind != "" {
 		db = db.Where("kind = ?", q.Kind)
 	}
+	if q.Source != "" {
+		db = db.Where("source = ?", q.Source.Normalize())
+	}
 	if q.BizScene != "" {
 		db = db.Where("biz_scene = ?", q.BizScene)
 	}

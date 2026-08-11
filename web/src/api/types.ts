@@ -142,10 +142,12 @@ export type ProgressView = {
 
 export type CreateCampaignInput = {
   biz_id: string
-  biz_scene: string
+  biz_scene?: string
   title: string
   template_id: string
-  audience_ref: string
+  audience_ref?: string
+  segment_code?: string
+  exclude_segment_code?: string
   channel?: ChannelType
   channels?: ChannelType[]
   channel_mode?: ChannelMode

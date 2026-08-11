@@ -246,7 +246,7 @@ func newTestService(segs *fakeSegments, sup *fakeSuppression, store *fakeStore, 
 	if store != nil {
 		storeArg = store
 	}
-	return NewService(segs, sup, storeArg, res)
+	return NewService(segs, nil, sup, storeArg, res)
 }
 
 // ---- tests ----

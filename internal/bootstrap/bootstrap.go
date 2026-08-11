@@ -88,8 +88,14 @@ func NewInfra(cfgPath string) (*Infra, error) {
 	channel.RegisterDefaults(chReg)
 	channel.RegisterFromConfig(chReg, cfg.Pusher.Channels)
 
+	segmentRepo := repo.NewSegmentRepo(db)
+	memberRepo := repo.NewSegmentMemberRepo(db)
+
 	audReg := audience.NewRegistry()
-	// 真实 HTTP Provider 优先注册，避免被 Demo 截胡
+	// 静态名单优先：仅响应 biz_scene=static，不会截胡业务 HTTP/Demo
+	audReg.Register(audience.NewStaticProvider(memberRepo))
+	slog.Info("audience static provider registered")
+	// 真实 HTTP Provider 优先于 Demo，避免被 Demo 截胡
 	if cfg.Audience.HTTP.Enabled && cfg.Audience.HTTP.URL != "" {
 		audReg.Register(audience.NewHTTPProvider(
 			cfg.Audience.HTTP.URL,
@@ -118,9 +124,8 @@ func NewInfra(cfgPath string) (*Infra, error) {
 		)
 	}
 
-	segmentRepo := repo.NewSegmentRepo(db)
 	suppressionStore := redisx.NewSuppressionStore(rdb.RDB(), cfg.Compliance.BlacklistKey, cfg.Compliance.UnsubscribeKeyPrefix)
-	segmentSvc := segment.NewService(segmentRepo, repo.NewSuppressionRepo(db), suppressionStore, audReg)
+	segmentSvc := segment.NewService(segmentRepo, memberRepo, repo.NewSuppressionRepo(db), suppressionStore, audReg)
 
 	prefRepo := repo.NewPreferenceRepo(db)
 	prefResolver := preference.NewResolver(prefRepo, cfg.Preference.CacheTTL(), cfg.Preference.CacheMaxEntries)

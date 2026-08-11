@@ -39,6 +39,7 @@ const (
 
 type Service struct {
 	segments    port.SegmentRepository
+	members     port.SegmentMemberRepository
 	suppression port.SuppressionRepository
 	store       port.SuppressionStore
 	resolver    AudienceResolver
@@ -46,11 +47,18 @@ type Service struct {
 
 func NewService(
 	segments port.SegmentRepository,
+	members port.SegmentMemberRepository,
 	suppression port.SuppressionRepository,
 	store port.SuppressionStore,
 	resolver AudienceResolver,
 ) *Service {
-	return &Service{segments: segments, suppression: suppression, store: store, resolver: resolver}
+	return &Service{
+		segments:    segments,
+		members:     members,
+		suppression: suppression,
+		store:       store,
+		resolver:    resolver,
+	}
 }
 
 // SegmentListResult 列表响应体（与其它模块统一 items/total/page/page_size）
@@ -79,6 +87,9 @@ type RefreshResult struct {
 
 func (s *Service) ListSegments(ctx context.Context, q domain.ListSegmentQuery) (*SegmentListResult, error) {
 	if q.Kind != "" && !q.Kind.Valid() {
+		return nil, errcode.InvalidParam
+	}
+	if q.Source != "" && !q.Source.Valid() {
 		return nil, errcode.InvalidParam
 	}
 	if q.Status != "" && !validStatus(q.Status) {
@@ -124,13 +135,14 @@ func (s *Service) LookupSegment(ctx context.Context, code string) (*domain.Audie
 
 func (s *Service) CreateSegment(ctx context.Context, in domain.SegmentInput) (*domain.AudienceSegment, error) {
 	name := strings.TrimSpace(in.Name)
-	bizScene := strings.TrimSpace(in.BizScene)
-	audienceRef := strings.TrimSpace(in.AudienceRef)
-	if name == "" || bizScene == "" || audienceRef == "" {
-		return nil, errcode.New(40001, "name / biz_scene / audience_ref 均不能为空")
+	if name == "" {
+		return nil, errcode.New(40001, "name 不能为空")
 	}
 	if !in.Kind.Valid() {
 		return nil, errcode.New(40001, "kind 只能是 include 或 exclude")
+	}
+	if !in.Source.Valid() {
+		return nil, errcode.New(40001, "source 只能是 provider 或 static")
 	}
 	status, err := normalizeStatus(in.Status)
 	if err != nil {
@@ -152,10 +164,21 @@ func (s *Service) CreateSegment(ctx context.Context, in domain.SegmentInput) (*d
 		return nil, errcode.New(40901, fmt.Sprintf("人群段 code 已存在：%s", code))
 	}
 
+	source := in.Source.Normalize()
+	bizScene := strings.TrimSpace(in.BizScene)
+	audienceRef := strings.TrimSpace(in.AudienceRef)
+	if source == domain.SegmentSourceStatic {
+		bizScene = domain.BizSceneStatic
+		audienceRef = code
+	} else if bizScene == "" || audienceRef == "" {
+		return nil, errcode.New(40001, "name / biz_scene / audience_ref 均不能为空")
+	}
+
 	seg := &domain.AudienceSegment{
 		Code:        code,
 		Name:        name,
 		Kind:        in.Kind.Normalize(),
+		Source:      source,
 		BizScene:    bizScene,
 		AudienceRef: audienceRef,
 		Description: strings.TrimSpace(in.Description),
@@ -181,10 +204,8 @@ func (s *Service) UpdateSegment(ctx context.Context, code string, in domain.Segm
 		return nil, err
 	}
 	name := strings.TrimSpace(in.Name)
-	bizScene := strings.TrimSpace(in.BizScene)
-	audienceRef := strings.TrimSpace(in.AudienceRef)
-	if name == "" || bizScene == "" || audienceRef == "" {
-		return nil, errcode.New(40001, "name / biz_scene / audience_ref 均不能为空")
+	if name == "" {
+		return nil, errcode.New(40001, "name 不能为空")
 	}
 	if !in.Kind.Valid() {
 		return nil, errcode.New(40001, "kind 只能是 include 或 exclude")
@@ -192,6 +213,16 @@ func (s *Service) UpdateSegment(ctx context.Context, code string, in domain.Segm
 	status, err := normalizeStatus(in.Status)
 	if err != nil {
 		return nil, err
+	}
+
+	bizScene := strings.TrimSpace(in.BizScene)
+	audienceRef := strings.TrimSpace(in.AudienceRef)
+	if seg.IsStatic() {
+		// 静态人群锁定 scene/ref，避免拆分时找不到 StaticProvider
+		bizScene = domain.BizSceneStatic
+		audienceRef = seg.Code
+	} else if bizScene == "" || audienceRef == "" {
+		return nil, errcode.New(40001, "name / biz_scene / audience_ref 均不能为空")
 	}
 
 	fields := map[string]any{
@@ -231,6 +262,11 @@ func (s *Service) DeleteSegment(ctx context.Context, code string) error {
 	if refs > 0 {
 		return errcode.New(40901, fmt.Sprintf("仍有 %d 个活动引用该人群段，请先解除引用再删除", refs))
 	}
+	if seg.IsStatic() && s.members != nil {
+		if err := s.members.DeleteBySegment(ctx, seg.Code); err != nil {
+			return err
+		}
+	}
 	if err := s.segments.Delete(ctx, seg.Code); err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return errcode.NotFound
@@ -240,13 +276,45 @@ func (s *Service) DeleteSegment(ctx context.Context, code string) error {
 	return nil
 }
 
-// RefreshSegment 重新翻页统计成员数。上游圈人失败只写进 RefreshError，
-// 不让一次统计失败把整个人群段的管理操作也带崩。
+// RefreshSegment 重新统计成员数。
+// 静态人群直接 COUNT 成员表；动态人群翻页圈人（有上限）。
 func (s *Service) RefreshSegment(ctx context.Context, code, operator string) (*RefreshResult, error) {
 	seg, err := s.mustGet(ctx, code)
 	if err != nil {
 		return nil, err
 	}
+
+	if seg.IsStatic() {
+		if s.members == nil {
+			return nil, errcode.New(50001, "静态人群存储未配置")
+		}
+		count, err := s.members.Count(ctx, seg.Code)
+		if err != nil {
+			return nil, err
+		}
+		now := time.Now()
+		fields := map[string]any{
+			"member_count":  count,
+			"counted_at":    now,
+			"refresh_error": "",
+			"audience_extra": domain.MarshalJSONColumn(map[string]any{
+				"total_hint": count,
+				"total":      count,
+			}, false),
+		}
+		if operator != "" {
+			fields["updated_by"] = operator
+		}
+		if err := s.segments.Update(ctx, seg.Code, fields); err != nil {
+			return nil, err
+		}
+		updated, err := s.mustGet(ctx, seg.Code)
+		if err != nil {
+			return nil, err
+		}
+		return &RefreshResult{Segment: updated, MemberCount: count}, nil
+	}
+
 	if s.resolver == nil {
 		return nil, errcode.New(50001, "未配置人群解析器，无法刷新成员数")
 	}

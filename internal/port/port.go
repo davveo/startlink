@@ -337,6 +337,17 @@ type SegmentRepository interface {
 	CountCampaignRefs(ctx context.Context, code string) (int64, error)
 }
 
+// SegmentMemberRepository 静态人群段成员
+type SegmentMemberRepository interface {
+	// BulkUpsert 按 (segment_code, user_id) 幂等写入，返回新增条数
+	BulkUpsert(ctx context.Context, members []domain.AudienceSegmentMember) (inserted int64, err error)
+	DeleteBySegment(ctx context.Context, segmentCode string) error
+	List(ctx context.Context, segmentCode string, q domain.ListSegmentMemberQuery) ([]domain.AudienceSegmentMember, int64, error)
+	Count(ctx context.Context, segmentCode string) (int64, error)
+	// ListPage 按 offset 分页（StaticProvider 翻页用）；order by id ASC 保证稳定
+	ListPage(ctx context.Context, segmentCode string, offset, limit int) ([]domain.AudienceSegmentMember, error)
+}
+
 // SuppressionRepository 黑名单 / 退订名单的可管理副本
 type SuppressionRepository interface {
 	// BulkAdd 幂等批量写入，返回新增条数

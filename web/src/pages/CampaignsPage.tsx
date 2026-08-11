@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ApiError, api } from '../api/client'
+import { segmentApi, type Segment } from '../api/segments'
 import type { ChannelMode, ChannelRouteRule, ChannelType, Priority, Template } from '../api/types'
 import { useAuth } from '../auth/AuthContext'
 import { Can } from '../auth/Can'
@@ -42,6 +43,7 @@ export function CampaignsPage() {
   const navigate = useNavigate()
   const [templates, setTemplates] = useState<Template[]>([])
   const [channels, setChannels] = useState<ChannelType[]>([])
+  const [includeSegments, setIncludeSegments] = useState<Segment[]>([])
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
@@ -51,6 +53,8 @@ export function CampaignsPage() {
     biz_scene: 'demo',
     title: 'Demo 投放',
     template_id: '',
+    audience_mode: 'manual' as 'manual' | 'segment',
+    segment_code: '',
     audience_ref: 'demo',
     audience_total: '20',
     channel: 'inbox' as ChannelType,
@@ -83,13 +87,15 @@ export function CampaignsPage() {
   useEffect(() => {
     void (async () => {
       try {
-        const [tpl, ch] = await Promise.all([
+        const [tpl, ch, segs] = await Promise.all([
           api.listTemplates({ status: 'approved', page_size: 100 }),
           api.listChannels(),
+          segmentApi.list({ kind: 'include', status: 'active', page_size: 100 }),
         ])
         const list = ch.channels ?? []
         setTemplates(tpl.items ?? [])
         setChannels(list)
+        setIncludeSegments(segs.items ?? [])
         setForm((f) => ({
           ...f,
           template_id: f.template_id || tpl.items?.[0]?.code || '',
@@ -102,7 +108,31 @@ export function CampaignsPage() {
   }, [])
 
   const channelOptions = useMemo(() => channels, [channels])
+  const selectedSegment = useMemo(
+    () => includeSegments.find((s) => s.code === form.segment_code),
+    [form.segment_code, includeSegments],
+  )
   const strategyMode = isStrategyMode(form.channel_mode)
+
+  function audiencePayload() {
+    if (form.audience_mode === 'segment' && form.segment_code) {
+      const seg = includeSegments.find((s) => s.code === form.segment_code)
+      return {
+        segment_code: form.segment_code,
+        biz_scene: seg?.source === 'static' ? 'static' : seg?.biz_scene || form.biz_scene,
+        audience_ref: seg?.audience_ref || form.segment_code,
+        audience_extra:
+          seg?.source === 'static'
+            ? { total: seg.member_count, total_hint: seg.member_count }
+            : undefined,
+      }
+    }
+    return {
+      biz_scene: form.biz_scene,
+      audience_ref: form.audience_ref,
+      audience_extra: { total: Number(form.audience_total) || 20 },
+    }
+  }
 
   function toggleExtraChannel(c: ChannelType) {
     setForm((f) => {
@@ -169,17 +199,19 @@ export function CampaignsPage() {
     setMsg('')
     try {
       const ch = buildChannelPayload()
+      const useSegment = form.audience_mode === 'segment' && form.segment_code
       const res = await api.createCampaign({
         biz_id: form.biz_id,
-        biz_scene: form.biz_scene,
+        biz_scene: useSegment ? undefined : form.biz_scene,
         title: form.title,
         template_id: form.template_id,
-        audience_ref: form.audience_ref,
+        segment_code: useSegment ? form.segment_code : undefined,
+        audience_ref: useSegment ? undefined : form.audience_ref,
+        audience_extra: useSegment
+          ? undefined
+          : { total: Number(form.audience_total) || 20 },
         ...ch,
         priority: form.priority || 'normal',
-        audience_extra: {
-          total: Number(form.audience_total) || 20,
-        },
         pace_qps: form.pace_qps ? Number(form.pace_qps) : undefined,
         expire_at: form.expire_at ? new Date(form.expire_at).toISOString() : undefined,
         max_fallback: form.max_fallback ? Number(form.max_fallback) : undefined,
@@ -300,30 +332,78 @@ export function CampaignsPage() {
             </Select>
           </Field>
           <Field
-            label="人群引用"
-            hint="传给人群服务的人群标识。Demo 源下任意非空字符串即可，常与场景配合使用。"
+            label="人群来源"
+            hint="静态 CSV 名单请先在「人群段」导入，再在此选择；短信/邮件渠道会读取成员 Extra 中的 phone/email。"
           >
-            <Input
-              required
-              value={form.audience_ref}
-              onChange={(e) => setForm({ ...form, audience_ref: e.target.value })}
-              placeholder="demo"
-            />
+            <Select
+              value={form.audience_mode}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  audience_mode: e.target.value as 'manual' | 'segment',
+                })
+              }
+            >
+              <option value="manual">手工填写 audience_ref</option>
+              <option value="segment">引用人群段（含静态导入）</option>
+            </Select>
           </Field>
-          <Field
-            label="Demo 人群总量"
-            hint="仅内置 Demo 人群生效：生成多少虚拟用户。生产人群源通常忽略此字段，改用真实圈选结果。"
-          >
-            <Input
-              type="number"
-              min={1}
-              value={form.audience_total}
-              onChange={(e) => setForm({ ...form, audience_total: e.target.value })}
-            />
-          </Field>
+          {form.audience_mode === 'segment' ? (
+            <Field
+              label="人群段"
+              hint={
+                selectedSegment
+                  ? `${selectedSegment.source === 'static' ? '静态导入' : '动态圈人'} · ${selectedSegment.member_count} 人 · ${selectedSegment.biz_scene}`
+                  : includeSegments.length === 0
+                    ? '暂无可用人群段，请先到「人群段」创建并导入。'
+                    : '选择 include 且启用中的人群段'
+              }
+            >
+              <Select
+                required
+                value={form.segment_code}
+                onChange={(e) => setForm({ ...form, segment_code: e.target.value })}
+              >
+                <option value="" disabled>
+                  选择人群段
+                </option>
+                {includeSegments.map((s) => (
+                  <option key={s.code} value={s.code}>
+                    {s.code} · {s.name}
+                    {s.source === 'static' ? ' [静态]' : ''} ({s.member_count})
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          ) : (
+            <>
+              <Field
+                label="人群引用"
+                hint="传给人群服务的人群标识。Demo 源下任意非空字符串即可，常与场景配合使用。"
+              >
+                <Input
+                  required
+                  value={form.audience_ref}
+                  onChange={(e) => setForm({ ...form, audience_ref: e.target.value })}
+                  placeholder="demo"
+                />
+              </Field>
+              <Field
+                label="Demo 人群总量"
+                hint="仅内置 Demo 人群生效：生成多少虚拟用户。生产人群源通常忽略此字段，改用真实圈选结果。"
+              >
+                <Input
+                  type="number"
+                  min={1}
+                  value={form.audience_total}
+                  onChange={(e) => setForm({ ...form, audience_total: e.target.value })}
+                />
+              </Field>
+            </>
+          )}
           <Field
             label="主渠道"
-            hint="单渠道投放时使用。若下方勾选了多渠道，则以多渠道列表为准。"
+            hint="单渠道投放时使用。若下方勾选了多渠道，则以多渠道列表为准。短信/邮件请选对应渠道。"
           >
             <Select
               value={form.channel}
@@ -523,12 +603,13 @@ export function CampaignsPage() {
                     setErr('')
                     try {
                       const multi = form.extraChannels
+                      const aud = audiencePayload()
                       const est = await api.estimateAudience({
-                        biz_scene: form.biz_scene,
-                        audience_ref: form.audience_ref,
+                        biz_scene: aud.biz_scene,
+                        audience_ref: aud.audience_ref,
                         channel: multi.length ? undefined : form.channel,
                         channels: multi.length ? multi : undefined,
-                        audience_extra: { total: Number(form.audience_total) || 20 },
+                        audience_extra: aud.audience_extra,
                         sample_limit: 10,
                       })
                       setEstimateText(JSON.stringify(est, null, 2))
@@ -556,14 +637,16 @@ export function CampaignsPage() {
                     setErr('')
                     try {
                       const ch = buildChannelPayload()
+                      const aud = audiencePayload()
                       const pf = await api.preflight({
                         biz_id: form.biz_id,
-                        biz_scene: form.biz_scene,
+                        biz_scene: aud.biz_scene,
                         title: form.title,
                         template_id: form.template_id,
-                        audience_ref: form.audience_ref,
+                        segment_code: aud.segment_code,
+                        audience_ref: aud.segment_code ? undefined : aud.audience_ref,
                         ...ch,
-                        audience_extra: { total: Number(form.audience_total) || 20 },
+                        audience_extra: aud.audience_extra,
                       })
                       setPreflightText(JSON.stringify(pf, null, 2))
                       setMsg('预检完成')

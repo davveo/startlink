@@ -172,6 +172,10 @@
   - 已交付：`internal/adapter/repo/segment.go`、`internal/app/segment/service.go`、`internal/handler/segment.go`、`web/src/pages/SegmentsPage.tsx`
   - CRUD + 成员数刷新（翻页统计有 50 页 / 20 万人上限，触顶标注为估算下界）；创建活动传 `segment_code` 时服务端展开为 `audience_ref` 与 `audience_extra`，活动自带参数优先
   - 人群段被活动引用时禁止删除，接口返回引用数
+- [x] **静态 CSV 人群（手机号 / 邮箱）**
+  - 已交付：`audience_segment_members` 表、`StaticProvider`（`biz_scene=static`）、`POST /segments/:code/members/import`（JSON / multipart CSV）、活动页可选 `segment_code`
+  - 成员 `phone`/`email` 写入 `TargetUser.Extra`，拆分后透传到 `SendRequest.Extra`；真实短信/邮件 Sender 从此字段取号
+  - 创建 `source=static` 时自动锁定 `biz_scene=static`、`audience_ref=<code>`；活动展开时强制覆盖 biz_scene，避免被 Demo Provider 截胡
 - [x] **排除名单**
   - 已交付：`Splitter.SetExcludeResolver` + `segment.Service.ResolveExcludeUserIDs`，拆分阶段一次性解析后逐用户剔除
   - 排除段停用或解析超限时**整单失败**而非静默跳过——少剔一部分等于对这批人误发

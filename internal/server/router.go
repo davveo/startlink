@@ -128,6 +128,9 @@ func New(cfg config.ServerConfig, deps Deps) *gin.Engine {
 				protected.PUT("/segments/:code", perm(auth.PermSegmentManage), deps.Segment.Update)
 				protected.DELETE("/segments/:code", perm(auth.PermSegmentManage), deps.Segment.Delete)
 				protected.POST("/segments/:code/refresh", perm(auth.PermSegmentManage), deps.Segment.Refresh)
+				protected.GET("/segments/:code/members", deps.Segment.ListMembers)
+				protected.POST("/segments/:code/members/import", perm(auth.PermSegmentManage), deps.Segment.ImportMembers)
+				protected.DELETE("/segments/:code/members", perm(auth.PermSegmentManage), deps.Segment.ClearMembers)
 
 				protected.GET("/suppressions", deps.Segment.ListSuppressions)
 				protected.GET("/suppressions/stats", deps.Segment.SuppressionStats)

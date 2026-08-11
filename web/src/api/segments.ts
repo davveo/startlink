@@ -41,12 +41,14 @@ function qs(params: Record<string, string | number | undefined>): string {
 
 export type SegmentKind = 'include' | 'exclude'
 export type SegmentStatus = 'active' | 'disabled'
+export type SegmentSource = 'provider' | 'static'
 
 export type Segment = {
   id: number
   code: string
   name: string
   kind: SegmentKind
+  source?: SegmentSource
   biz_scene: string
   audience_ref: string
   description?: string
@@ -73,8 +75,9 @@ export type SegmentInput = {
   code?: string
   name: string
   kind?: SegmentKind
-  biz_scene: string
-  audience_ref: string
+  source?: SegmentSource
+  biz_scene?: string
+  audience_ref?: string
   audience_extra?: Record<string, unknown>
   description?: string
   status?: SegmentStatus
@@ -85,6 +88,33 @@ export type RefreshResult = {
   member_count: number
   estimated: boolean
   error?: string
+}
+
+export type SegmentMember = {
+  id: number
+  segment_code: string
+  user_id: string
+  phone?: string
+  email?: string
+  created_at: string
+  updated_at: string
+}
+
+export type SegmentMemberListResult = {
+  items: SegmentMember[]
+  total: number
+  page: number
+  page_size: number
+}
+
+export type ImportMembersResult = {
+  submitted: number
+  accepted: number
+  skipped: number
+  member_count: number
+  replaced: boolean
+  invalid_rows?: number
+  sample_errors?: string[]
 }
 
 export type SuppressionKind = 'blacklist' | 'unsubscribe'
@@ -131,6 +161,7 @@ export type RemoveSuppressionResult = {
 export const segmentApi = {
   list: (params: {
     kind?: string
+    source?: string
     biz_scene?: string
     status?: string
     keyword?: string
@@ -156,6 +187,49 @@ export const segmentApi = {
     request<RefreshResult>(`/api/v1/segments/${encodeURIComponent(code)}/refresh`, {
       method: 'POST',
       body: '{}',
+    }),
+
+  listMembers: (code: string, params?: { keyword?: string; page?: number; page_size?: number }) =>
+    request<SegmentMemberListResult>(
+      `/api/v1/segments/${encodeURIComponent(code)}/members${qs(params ?? {})}`,
+    ),
+
+  importMembersJSON: (
+    code: string,
+    input: { mode?: 'append' | 'replace'; members: Array<{ user_id?: string; phone?: string; email?: string }> },
+  ) =>
+    request<ImportMembersResult>(`/api/v1/segments/${encodeURIComponent(code)}/members/import`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+
+  importMembersCSV: async (code: string, file: File, mode: 'append' | 'replace' = 'append') => {
+    const fd = new FormData()
+    fd.append('file', file)
+    fd.append('mode', mode)
+    const res = await fetch(`/api/v1/segments/${encodeURIComponent(code)}/members/import`, {
+      method: 'POST',
+      credentials: 'include',
+      body: fd,
+    })
+    let body: ApiBody<ImportMembersResult>
+    try {
+      body = (await res.json()) as ApiBody<ImportMembersResult>
+    } catch {
+      throw new ApiError(res.status, `HTTP ${res.status}`)
+    }
+    if (body.code !== 0) {
+      throw new ApiError(body.code, body.message || 'request failed')
+    }
+    if (body.data === undefined || body.data === null) {
+      throw new ApiError(body.code, '接口返回缺少 data')
+    }
+    return body.data
+  },
+
+  clearMembers: (code: string) =>
+    request<ImportMembersResult>(`/api/v1/segments/${encodeURIComponent(code)}/members`, {
+      method: 'DELETE',
     }),
 
   listSuppressions: (params: {

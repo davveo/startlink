@@ -133,6 +133,7 @@ INNER JOIN (
 		&domain.AuthRolePermission{},
 		&domain.AuthPermission{},
 		&domain.AudienceSegment{},
+		&domain.AudienceSegmentMember{},
 		&domain.SuppressionEntry{},
 		&domain.UserPreference{},
 		&domain.ConsentLog{},

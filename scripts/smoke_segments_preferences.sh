@@ -78,6 +78,19 @@ has "更新已生效" '冒烟人群改名' "$(req GET "/segments/$SEG")"
 rejected "缺少必填字段的更新被拒" "$(req PUT "/segments/$SEG" '{"name":"只给名字"}')"
 has "刷新成员数" '"member_count"' "$(req POST "/segments/$SEG/refresh" '{}')"
 
+STATIC="smoke-static-$SUFFIX"
+section "静态 CSV 人群"
+body='{"code":"'"$STATIC"'","name":"静态短信名单","kind":"include","source":"static"}'
+has "创建 static 人群段" '"code":0' "$(req POST /segments "$body")"
+has "static 锁定 biz_scene" '"biz_scene":"static"' "$(req GET "/segments/$STATIC")"
+body='{"mode":"replace","members":[{"phone":"13800138001"},{"email":"smoke@example.com","user_id":"u-mail"},{"phone":""}]}'
+has "JSON 导入成员" '"accepted":2' "$(req POST "/segments/$STATIC/members/import" "$body")"
+has "成员列表可见" '13800138001' "$(req GET "/segments/$STATIC/members?page=1&page_size=10")"
+has "刷新静态成员数" '"member_count":2' "$(req POST "/segments/$STATIC/refresh" '{}')"
+body='{"biz_id":"'"$BIZ"'-sms","title":"静态短信","template_id":"'"$TEMPLATE"'","segment_code":"'"$STATIC"'","channel":"sms","priority":"normal","as_draft":true}'
+has "用静态人群创建短信活动" '"code":0' "$(req POST /campaigns "$body")"
+rejected "动态段不可导入成员" "$(req POST "/segments/$SEG/members/import" '{"members":[{"phone":"1"}]}')"
+
 body='{"code":"'"$EXC"'","name":"冒烟排除","kind":"exclude","biz_scene":"demo","audience_ref":"demo:all","audience_extra":{"total":5}}'
 has "创建 exclude 排除名单" '"code":0' "$(req POST /segments "$body")"
 
