@@ -1,10 +1,12 @@
 # Starlink 功能待办清单（TODO）
 
-更新日期：2026-08-06
+更新日期：2026-08-11
 
 基于代码与 README「已知限制」整理。按优先级推进；勾选表示已完成。
 
 > **口径**：流水线终态按子任务入队；用户成功/失败与进度按 `push_records` 渠道结果（含 `suppressed` / `unreachable` 等抑制态分项）。
+>
+> **分工**：[TODO_FEATURES.md](TODO_FEATURES.md) 登记尚未建设的产品能力；本文登记已完成整改与工程债。文档导航：[docs/README.md](README.md)。
 
 ---
 
@@ -193,11 +195,11 @@
 ## 建议迭代顺序
 
 1. ~~第一期 P0～P4（可靠性、口径、SPI、配额、工程债）~~ ✅
-2. ~~第二期正确性补强（退订终检、状态 fail-closed、回执事务/唯一键、provider 消歧、幂等顺序、分页保护、Extra、HTTP 限制、抑制态）~~ ✅
-3. API 与运营：活动列表、预检、测试发送、投递漏斗、DLQ 运维 API
-4. 安全与平台：~~登录门禁 + 简易 RBAC~~（租户/审批仍待）、回执验签、Webhook outbox、独立迁移、Readiness、指标
+2. ~~第二期正确性补强~~ ✅
+3. ~~API 与运营：活动列表、预检、测试发送、投递漏斗、RBAC、概览/通知/审计、人群段/CSV、偏好、业务 trace、按渠道重试~~ ✅（**仅剩 DLQ/PEL 运维 API** 等运维面，见 FEATURES）
+4. 安全与平台硬门槛：回执验签、Webhook outbox、独立迁移、Scheduler/Pusher Readiness、**Prometheus 指标**（业务 trace 已有，otel 可选）
 5. ~~模板与投放：多渠道模板、版本历史、多语言、用户时区、实验平台~~ ✅
-6. 多租户、数据归档、隐私治理、集成/E2E/容量测试
+6. 多租户、数据归档、隐私治理、集成/E2E/容量测试；周期活动 / 渐进放量接通（FEATURES §14–17）
 
 ---
 
@@ -205,15 +207,17 @@
 
 | 文档 | 说明 |
 |------|------|
-| [TODO_FEATURES.md](TODO_FEATURES.md) | **尚未建设的功能路线图**（本文件只记已完成整改与工程债） |
-| [user-guide/用户使用手册.md](user-guide/用户使用手册.md) | **运营台用户使用手册**（含界面截图） |
-| [README.md](../README.md) | 已知限制原文与修复建议 |
+| [README.md](README.md) | **docs 总导航**与能力→文档对照 |
+| [TODO_FEATURES.md](TODO_FEATURES.md) | **尚未建设的功能路线图** |
+| [user-guide/用户使用手册.md](user-guide/用户使用手册.md) | 运营台手册（含 CSV 静态人群） |
+| [../README.md](../README.md) | 仓库 README：API、配置、已知限制 |
 | [创建活动主流程.md](创建活动主流程.md) | 创建链路 |
+| [代码阅读_00_索引与架构总览.md](代码阅读_00_索引与架构总览.md) | 架构索引 |
 | [Scheduler层代码解析.md](Scheduler层代码解析.md) | 调度层 |
 | [Pusher层代码解析.md](Pusher层代码解析.md) | 推送层 |
 | [优先级队列精读.md](优先级队列精读.md) | high/normal |
-| [多渠道策略精读.md](多渠道策略精读.md) | single/fallback/parallel |
+| [多渠道策略精读.md](多渠道策略精读.md) | 渠道策略 |
 
 ---
 
-*新增能力请同步在本文件追加勾选框；完成项打勾并在 PR 中引用对应条目。本文件已合并原根目录 `TODO_V2.md`。*
+*新增能力请同步勾选本文件或 FEATURES；并更新 [docs/README.md](README.md)「能力 → 文档」表。*

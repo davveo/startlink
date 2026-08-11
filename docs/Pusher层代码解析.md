@@ -147,14 +147,15 @@ RocketMQ / Memory 驱动未实现同等 PEL/DLQ；Memory 失败时简单重新�
 
 ## 5. `Gateway.Handle` —— 单条消息总控
 
-```91:133:internal/push/gateway.go
+> 2026-08-11 补记：限流前还有 **偏好/退订/用户免打扰/营销频次** 终检；渠道链由 `msg.ResolveSendChannels()` 决定（含 conditional / cost_priority）；`doSend` 使用按渠道 `RetryPolicy`；业务异常可写 `trace_events`（成功靠 `push_records` 下钻）。
+
+```go
 func (g *Gateway) Handle(ctx context.Context, msg domain.PushMessage) error {
-	// ① 主任务门禁
-	// ② 去重 / 频控通过后 waitToken(channel, priority)
-	// ③ 超时 → ErrChannelThrottled（留 PEL，不记 fail）
-	// ③ 再次门禁
-	// ④ RenderTemplate + EffectiveChannels/Mode
-	// ⑤ switch mode → sendParallel / sendFallback / sendOne
+	// ① 主任务门禁（cancelled / paused）
+	// ② 偏好 / Redis 退订 / quiet hours / marketing freq → suppressed + ACK
+	// ③ 频控 Allow；waitToken(channel, priority)
+	// ④ RenderTemplate + ResolveSendChannels
+	// ⑤ switch mode → sendParallel / sendFallback / sendOne（按渠道重试）
 }
 ```
 
@@ -206,7 +207,19 @@ default   → sendOne(chs[0])
 
 ---
 
-## 6. 三种发送策略
+## 6. 发送策略（`channel_mode`）
+
+除经典 **single / fallback / parallel** 外，活动还可指定：
+
+| mode | 行为 |
+|------|------|
+| `all_success` | 多渠道均需成功（细节见多渠道策略精读） |
+| `conditional` | 按 `channel_routes` 规则匹配渠道链 |
+| `cost_priority` | 按 `channel_costs` 成本排序后发送 |
+
+实现入口：`domain.ResolveSendChannels` → Gateway 再走 fallback/parallel/single 执行器。
+
+### 6.1 `sendFallback` / `sendParallel` 要点（原 §6）
 
 ### 6.1 `single`：只打第一条渠道
 

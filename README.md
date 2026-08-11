@@ -6,6 +6,7 @@ Starlink 是一个用 Go 编写的异步推送平台骨架。业务方通过 HTT
 
 ## 目录
 
+- [文档](#文档)
 - [已实现能力](#已实现能力)
 - [架构与处理流程](#架构与处理流程)
 - [环境要求](#环境要求)
@@ -31,21 +32,33 @@ Starlink 是一个用 Go 编写的异步推送平台骨架。业务方通过 HTT
 ## 整体架构图
 ![starlink-architecture.jpg](docs%2Fstarlink-architecture.jpg)
 
+## 文档
+
+| 文档 | 说明 |
+|------|------|
+| [docs/README.md](docs/README.md) | **文档导航**：能力对照、阅读路线 |
+| [docs/user-guide/用户使用手册.md](docs/user-guide/用户使用手册.md) | 运营台操作手册 |
+| [docs/TODO_FEATURES.md](docs/TODO_FEATURES.md) | 未建设功能路线图 |
+| [docs/TODO.md](docs/TODO.md) | 已完成整改与工程债勾选 |
+| [docs/代码阅读_00_索引与架构总览.md](docs/代码阅读_00_索引与架构总览.md) | 架构与代码阅读索引 |
+
 ## 已实现能力
 
-- 活动创建、查询、定时执行、暂停、恢复、取消和失败重推 API
-- 模板 CRUD、提交审核、通过、驳回、停用和重新启用
-- 运营台登录门禁（YAML 账号 + Session Cookie；回执与 healthz 放行）
-- `biz_id` 创建幂等，以及数据库级“活动 + 用户 + 渠道”投递去重
-- 人群分页、过滤、子任务分片和多 Scheduler 实例认领
-- 可插拔 MQ：默认 Redis Stream，支持 RocketMQ / Memory，可 `mq.Register` 自定义驱动
-- 高、普通两级优先级队列（事务 vs 营销）——**按活动**传 `priority`，非全局
-- 单渠道、按顺序降级和多渠道并行——**按活动**传 `channels` + `channel_mode`，非全局
-- 渠道配额限流（`channel_quota`）、用户频控、推送流水和渠道回执
-- 任务终态 Webhook
-- Docker Compose 本地运行环境
+- 活动创建 / 草稿发布、查询、定时执行、暂停、恢复、取消、失败重推；预检、Dry-run、人群试算、漏斗与导出
+- 模板 CRUD、审核流、多渠道内容、条件路由 / 成本优先、实验字段与指标
+- 运营台（React）：登录门禁、任务/模板/通知/概览、人群段（含 **CSV 静态导入**）、黑名单、偏好中心、审计、RBAC、全链路追踪
+- **鉴权**：Session Cookie + **MySQL RBAC**（角色/权限/用户；YAML 仅作 seed）
+- `biz_id` 创建幂等；`push_records` 活动+用户+渠道投递去重；活动级 `trace_id`（混合粒度 `trace_events`）
+- 人群：Demo / HTTP Provider / **StaticProvider**；Filter + Gateway 偏好/退订终检；排除名单
+- 可插拔 MQ：默认 Redis Stream，支持 RocketMQ / Memory
+- 高、普通两级优先级队列；多渠道策略（single / fallback / parallel / all_success / conditional / cost_priority）
+- **按渠道**重试次数、退避曲线与发送超时（`pusher.channels.*`）
+- 渠道配额限流、用户频控、推送流水与渠道回执；任务终态 Webhook
+- Docker Compose 本地运行；`/healthz` + `/readyz`（API 依赖检查）
 
-技术栈：Go 1.22、Gin、GORM、MySQL 8、Redis（去重/计数；默认 MQ 驱动为 Redis Stream，可换 RocketMQ 等）。
+技术栈：Go 1.22+、Gin、GORM、MySQL 8、Redis、React 运营台。
+
+更细的「能力 → 文档」对照见 [docs/README.md](docs/README.md)。
 
 ## 架构与处理流程
 
@@ -593,7 +606,7 @@ curl -X POST http://localhost:8080/api/v1/callbacks/receipt \
 
 ### 健康检查
 
-`GET /healthz` 只说明 HTTP 进程存活，返回 `{"code":0,"message":"ok","data":{"status":"up"}}`，不检查 MySQL、Redis、MQ 或渠道是否可用，也没有独立的 readiness 端点。
+`GET /healthz` 只说明 HTTP 进程存活。依赖探活请用 `GET /readyz`（检查 MySQL / Redis / MQ；`memory`/`redis_stream` 等驱动行为见实现）。二者都不覆盖渠道厂商可达性；Scheduler / Pusher 进程目前没有独立 HTTP 探针。
 
 ### 业务错误码
 
@@ -1052,7 +1065,9 @@ pending → running ⇄ paused
 
 27. **安全能力仍需继续生产化。** 运营台已有 Session Cookie + MySQL RBAC，密码只保存 bcrypt，密码/角色变更会使旧会话失效；回执支持 HMAC、时间窗和 nonce 防重放；Webhook 支持主机白名单、签名、并发限制和内存重试。仍待建设多租户、持久化 Webhook outbox、统一密钥管理和多级审批。
 28. **启动迁移风险。** API、Scheduler、Pusher 都会执行 `AutoMigrate`，三个进程可能并发执行 DDL；迁移前的历史重复流水清理错误还被 `_ =` 忽略。生产应由单独的迁移任务执行。
-29. **健康检查过浅。** `/healthz` 不检查依赖，没有 readiness、Prometheus 指标、链路追踪、结构化审计或告警。
+29. **可观测性仍不完整。** API 已有 `/healthz` + `/readyz`（检查 MySQL/Redis/MQ）；业务全链路有 `trace_id` / `trace_events` 与运营台追踪页；审计日志与请求 ID 已有。**仍缺**：Scheduler/Pusher 独立探针、Prometheus `/metrics`、OpenTelemetry、告警规则；健康检查也不覆盖渠道厂商可达性。
+30. **数据会无限增长。** `push_records` / 回执 / 审计 / 通知等尚无 TTL/归档（见 TODO_FEATURES §6）。
+31. **生产渠道与迁移。** 渠道默认 stub（可配 HTTP）；无独立 `cmd/migrate`，三进程 AutoMigrate。
 30. **~~测试为空~~（已有基础单测）。** 覆盖状态机、渠道求交、NormalizeChannels、ResolvePriority、RenderTemplate、MQ PEL/DLQ、聚合幂等；集成/E2E 仍待扩。
 
 ### 七、工程细节

@@ -1,16 +1,16 @@
 # Starlink 功能路线图（TODO）
 
-更新日期：2026-08-09
+更新日期：2026-08-11
 
-**本文件只登记"尚未建设"的能力。** 已完成的可靠性整改、口径修正与工程债见 [TODO.md](TODO.md)，两者互补，不重复登记。
+**本文件只登记"尚未建设"或"仅有底座"的能力。** 已完成的可靠性整改与工程债见 [TODO.md](TODO.md)；文档导航见 [README.md](README.md)。已交付项会保留 `[x]` 便于对照，避免重复开工。
 
-每项标注：**现状**（附代码证据路径，便于核实结论是否仍然成立）+ **要做什么**。优先级分四档：
+每项标注：**现状**（附代码证据路径）+ **要做什么**。优先级分四档：
 
 | 档位 | 含义 |
 |------|------|
-| **P0** | 生产上线前的硬门槛，缺失会导致线上不可运维或数据无限膨胀 |
-| **P1** | 平台化与运营效率，决定这套系统能否被多方接入、被运营独立使用 |
-| **P2** | 增长与分析闭环，决定推送效果能否被度量和优化 |
+| **P0** | 生产上线前的硬门槛 |
+| **P1** | 平台化与运营效率 |
+| **P2** | 增长与分析闭环 |
 | **P3** | 体验与长期工程质量 |
 
 ---
@@ -23,8 +23,8 @@
   - 现状：全库无 `prometheus` / `/metrics` / `pprof` 引用；仅有 `slog` 文本日志（`pkg/applog/applog.go`）
   - 要做：暴露 `/metrics`，核心指标至少覆盖——队列积压与 PEL 深度、DLQ 增量、各渠道发送成功率与 P99 时延、限流拒绝数、拆分耗时、聚合滞后、子任务认领速率
 - [ ] **OpenTelemetry 链路追踪**
-  - 现状：无 otel 依赖；API → Scheduler → Pusher 三进程调用链无法串联
-  - 要做：接入 otel SDK，MQ 消息头透传 trace context，使一次活动投递可端到端追踪
+  - 现状：无 otel 依赖；**业务级**全链路已用 `trace_id` + `trace_events`（见上条 `[x]`），此处指跨进程的 OpenTelemetry 标准追踪
+  - 要做：接入 otel SDK，MQ 消息头透传 trace context，与现有业务 `tr_*` 可关联
 - [x] **业务全链路 trace（混合粒度）**
   - 已做：创建活动生成 `trace_id`（`tr_*`）落 `main_tasks`；经 Splitter/Worker/`PushMessage`/Gateway/Callback/Aggregator 写入 `trace_events`
   - 粒度：活动/子任务节点全量；用户级仅失败/抑制/限流/延期/过期等异常（成功靠 `push_records` 下钻）
@@ -125,7 +125,7 @@
   - 现状：`internal/server/router.go` 无 throttle 中间件；`internal/auth/session.go` 无失败锁定
   - 要做：接口级限流 + 登录失败计数锁定 + 验证码
 - [ ] **熔断与重试预算**
-  - 现状：MQ `max_delivery`、Gateway `max_retry`、Webhook 3 次各自独立，无全局预算；渠道故障只有线性重试，无熔断
+  - 现状：MQ `max_delivery`、Gateway **按渠道** `RetryPolicy`（次数/退避/超时已可配，见下条 `[x]`）、Webhook 重试各自独立，**无全局预算、无熔断器**
   - 要做：上游调用（Audience / Channel / Webhook）加熔断与统一重试预算
 - [x] **按渠道重试策略**
   - 已做：`pusher.max_retry` / `retry_backoff` / `retry_base_ms` / `retry_max_ms` / `timeout_sec` 为默认；`pusher.channels.*` 可覆盖（`internal/config/retry.go`、`Gateway.doSend`）
@@ -274,7 +274,7 @@
 ### 21. 分析与数据流通
 
 - [ ] **跨活动分析**
-  - 现状：`OverviewView` 只有状态计数与最近 8 条活动（`internal/app/campaign/overview.go`）
+  - 现状：概览页已有近 24h 发送/成功率等 KPI 与最近活动（手册 §3）；仍缺 cohort、留存、跨活动渠道对比
   - 要做：cohort、留存、渠道对比、场景对比报表
 - [ ] **时序指标**
   - 现状：漏斗是静态计数（`internal/port/port.go`）
